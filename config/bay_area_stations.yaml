@@ -1,0 +1,46 @@
+# Starter list of San Francisco-Oakland-San Jose DMA broadcast stations.
+# VERIFY AND EXPAND this against https://publicfiles.fcc.gov/find before
+# relying on it - callsigns, ownership, and which stations maintain an online
+# political file can change. Radio political files only became mandatory for
+# larger-market stations; smaller/independent stations may not have one.
+#
+# market: a human label used for tagging (Drive properties + DB), not sent to
+# the FCC API.
+
+market: "San Francisco-Oakland-San Jose"
+
+stations:
+  - callsign: KGO-TV
+    service: TV
+  - callsign: KPIX
+    service: TV
+  - callsign: KRON-TV
+    service: TV
+  - callsign: KTVU
+    service: TV
+  - callsign: KNTV
+    service: TV
+  - callsign: KQED
+    service: TV
+  - callsign: KICU-TV
+    service: TV
+  - callsign: KOFY-TV
+    service: TV
+  - callsign: KBCW
+    service: TV
+  - callsign: KCNS
+    service: TV
+  - callsign: KKPX-TV
+    service: TV
+  - callsign: KEMO-TV
+    service: TV
+  - callsign: KTSF
+    service: TV
+  # Radio - add commercial stations with 5+ FTEs in the market per FCC rules;
+  # this list is intentionally incomplete as a starting point.
+  - callsign: KGO
+    service: AM
+  - callsign: KCBS
+    service: AM
+  - callsign: KNBR
+    service: AM
