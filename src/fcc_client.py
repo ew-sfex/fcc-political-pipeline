@@ -51,6 +51,12 @@ SERVICE_TO_PROFILE_SLUG = {
 
 TITLE_CATEGORY_RE = re.compile(r"uploaded a file in (.+)$")
 
+# FCC's own feed generation doesn't escape bare `&` in filenames/titles (e.g.
+# "Issues & Programs 2026 Q2.pdf"), which makes the XML invalid - confirmed
+# 2026-08-07 against KQED's feed. Escape any `&` not already part of a valid
+# entity before parsing, rather than let the whole station's fetch fail.
+BARE_AMPERSAND_RE = re.compile(r"&(?!amp;|lt;|gt;|quot;|apos;|#\d+;|#x[0-9a-fA-F]+;)")
+
 
 @dataclass
 class FccFiling:
@@ -147,6 +153,7 @@ class FccClient:
         """
         url = self._rss_url(callsign, service)
         content = self._fetch_bytes(url)
+        content = BARE_AMPERSAND_RE.sub("&amp;", content.decode("utf-8")).encode("utf-8")
 
         root = ET.fromstring(content)
         filings = []

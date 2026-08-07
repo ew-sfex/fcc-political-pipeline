@@ -12,7 +12,7 @@ market: "San Francisco-Oakland-San Jose"
 stations:
   - callsign: KGO-TV
     service: TV
-  - callsign: KPIX
+  - callsign: KPIX-TV
     service: TV
   - callsign: KRON-TV
     service: TV
@@ -26,8 +26,6 @@ stations:
     service: TV
   - callsign: KOFY-TV
     service: TV
-  - callsign: KBCW
-    service: TV
   - callsign: KCNS
     service: TV
   - callsign: KKPX-TV
@@ -38,9 +36,15 @@ stations:
     service: TV
   # Radio - add commercial stations with 5+ FTEs in the market per FCC rules;
   # this list is intentionally incomplete as a starting point.
-  - callsign: KGO
-    service: AM
   - callsign: KCBS
     service: AM
   - callsign: KNBR
     service: AM
+  # Two stations removed 2026-08-07 after verifying against
+  # https://publicfiles.fcc.gov/find - neither callsign has any match there
+  # (TV+FM+AM search), meaning the callsign doesn't exist in FCC's current
+  # directory, likely a format/ownership change since this list was made. If
+  # you know either station's current callsign, re-add it and it'll pick
+  # right up:
+  #   - KGO (810 AM, San Francisco)
+  #   - KBCW (TV, San Francisco)
