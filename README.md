@@ -48,6 +48,12 @@ Files/2026/Non-Candidate Issue Ads/BOLD America`) ends in the purchaser /
 committee name, so `purchaser` is populated directly at ingest time from the
 FCC's own taxonomy — no LLM extraction needed for that field.
 
+Each station's feed is its **entire** public file upload history, not just
+political ads — EEO reports, ownership filings, issues/programs lists, etc.
+all show up too (confirmed 2026-08-07: only ~57% of a typical feed is
+political). `ingest.py` filters to entries whose `category_path` starts with
+`Political Files/` via `FccFiling.is_political` before writing to the DB.
+
 FCC also publishes an official, documented, no-auth-required JSON API
 (publicfiles.fcc.gov/developer, OpenAPI spec at
 `/api/manager//json/apis.json`) covering the same folder/file metadata

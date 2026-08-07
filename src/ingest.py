@@ -58,9 +58,10 @@ def _ingest_stations(fcc, session, stations) -> int:
             log.exception("RSS fetch failed for %s - skipping station this run", station.callsign)
             continue
 
-        log.info("%s: %d entries in feed", station.callsign, len(filings))
+        political = [f for f in filings if f.is_political]
+        log.info("%s: %d entries in feed, %d political", station.callsign, len(filings), len(political))
 
-        for filing in filings:
+        for filing in political:
             if processed >= config.MAX_FILINGS_PER_RUN:
                 break
             if already_ingested(session, filing.file_id):

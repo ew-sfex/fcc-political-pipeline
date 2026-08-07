@@ -69,6 +69,14 @@ class FccFiling:
     service: str
 
     @property
+    def is_political(self) -> bool:
+        """Each station's RSS feed is its full public-file upload history
+        (EEO reports, ownership filings, issues/programs lists, etc.), not
+        just political ads - callers that only want ad spend should filter
+        on this."""
+        return (self.category_path or "").startswith("Political Files/")
+
+    @property
     def purchaser(self) -> str | None:
         if not self.category_path:
             return None
