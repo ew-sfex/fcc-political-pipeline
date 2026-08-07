@@ -1,13 +1,16 @@
-"""Entrypoint: pull new Bay Area political filings from each station's FCC
-RSS feed and record filing metadata in the DB.
+"""Entrypoint: pull Bay Area political filings from each station's complete
+Political Files folder tree (via FccClient.walk_political_files - see
+fcc_client.py) and record filing metadata in the DB. Already-ingested
+filings are skipped (see already_ingested), so this is safe to run
+repeatedly/frequently - each run only writes rows for filings not already
+in the DB, regardless of how much of the tree is walked to find them.
 
 PDF storage in Drive is deferred: FCC's Akamai layer blocks the file-download
 endpoint for any automated client (confirmed 2026-08-07, including via a full
 Playwright-driven Chromium - only a manually-driven browser tab succeeds).
-The metadata API (which this uses, via the RSS feed) has no such block. Each
-row still records `download_url` so PDFs can be fetched later, by hand or
-once FCC (contacted re: developer@fcc.gov) confirms a sanctioned automated
-path. See README.md.
+The metadata API (which this uses) has no such block. Each row still records
+`download_url` so PDFs can be fetched later, by hand or once FCC (contacted
+re: developer@fcc.gov) confirms a sanctioned automated path. See README.md.
 
 Run: python -m src.ingest
 """
@@ -51,17 +54,16 @@ def _ingest_stations(fcc, session, stations) -> int:
             log.warning("Hit MAX_FILINGS_PER_RUN cap (%d), stopping early", config.MAX_FILINGS_PER_RUN)
             break
 
-        log.info("Fetching RSS feed for %s (%s)", station.callsign, station.service)
+        log.info("Walking Political Files tree for %s (%s)", station.callsign, station.service)
         try:
-            filings = fcc.fetch_station_feed(station.callsign, station.service)
+            filings = fcc.walk_political_files(station.callsign, station.service)
         except Exception:
-            log.exception("RSS fetch failed for %s - skipping station this run", station.callsign)
+            log.exception("Folder walk failed for %s - skipping station this run", station.callsign)
             continue
 
-        political = [f for f in filings if f.is_political]
-        log.info("%s: %d entries in feed, %d political", station.callsign, len(filings), len(political))
+        log.info("%s: %d political filings found", station.callsign, len(filings))
 
-        for filing in political:
+        for filing in filings:
             if processed >= config.MAX_FILINGS_PER_RUN:
                 break
             if already_ingested(session, filing.file_id):

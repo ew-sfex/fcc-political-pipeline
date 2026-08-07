@@ -1,31 +1,40 @@
-"""Client for FCC OPIF per-station RSS (Atom) feeds.
+"""Client for FCC's Online Public Inspection File (OPIF) system.
 
-Confirmed working (2026-08-05) at:
-    https://publicfiles.fcc.gov/[profile-type]/[callsign]/rss/
-e.g. https://publicfiles.fcc.gov/tv-profile/kgo-tv/rss/
+Two data sources, for two different purposes:
 
-This supersedes an earlier version of this client that queried
-https://www.fcc.gov/search/api - that endpoint turned out to be the general
-fcc.gov website content search (news, pages, bureau docs), NOT the political
-file index. This RSS feed is confirmed (by direct browser inspection) to
-return actual per-station political file upload entries.
+1. Per-station RSS (Atom) feed - https://publicfiles.fcc.gov/[profile-type]/
+   [callsign]/rss/ - e.g. https://publicfiles.fcc.gov/tv-profile/kgo-tv/rss/.
+   Confirmed working 2026-08-05; supersedes an earlier version of this client
+   that queried https://www.fcc.gov/search/api (the general fcc.gov website
+   content search, not the political file index - wrong endpoint entirely).
+   IMPORTANT caveat confirmed 2026-08-07: this feed is NOT a full upload
+   history - it's capped at the 10 most recent uploads, of any category, no
+   matter how much history a station has (KGO-TV alone has 913 political
+   files going back to 2017; its feed still shows only 10 total). Only used
+   here to bootstrap each station's numeric entity/facility ID (embedded in
+   every entry's title, e.g. "tv Entity 34470 uploaded...") - there's no
+   working public search endpoint for callsign -> entity ID otherwise.
 
-Fetching is done via a real headless Chromium (Playwright), not `requests`.
-A browser-like User-Agent alone still gets a 403 from Akamai (confirmed
-2026-08-07) - Akamai is fingerprinting the TLS/JS layer, not just headers.
-Playwright drives an actual browser engine so it passes that check.
+2. OPIF Manager JSON API (publicfiles.fcc.gov/developer) - documented, public,
+   no auth required - used for the actual file discovery via
+   `walk_political_files()`, which recursively walks a station's "Political
+   Files" folder tree (year -> category -> purchaser -> files) via
+   `/api/manager/folder/...`. This returns COMPLETE folder contents, no
+   windowing, so - unlike the RSS feed - nothing can silently fall off
+   between runs regardless of upload volume. Folders carry a `file_count`
+   (recursive total under that folder), which is used to skip empty
+   branches entirely rather than recursing into them.
 
-Each Atom <entry> looks like:
-    <title>tv Entity 34470 uploaded a file in Political Files/2026/Non-Candidate Issue Ads/BOLD America</title>
-    <link href="https://publicfiles.fcc.gov/api/manager/download/{folder_guid}/{file_guid}.pdf"/>
-    <id>{file_guid}</id>
-    <updated>2026-07-20T23:59:59Z</updated>
-    <content type="xhtml">... uploaded <strong>{filename}</strong> in <strong>{category_path}</strong> on {date}. ...</content>
+Both of the above use plain `requests` - only the RSS feed origin
+(publicfiles.fcc.gov) needs the Playwright/headless-browser workaround
+below; the JSON API has no such block (confirmed 2026-08-07).
 
-Notably, the category path (e.g. "Political Files/2026/Non-Candidate Issue
-Ads/BOLD America" or ".../Federal/US House/Melissa Hernandez for Congress")
-has the purchaser/advertiser as its final segment - we extract that directly,
-no LLM needed for this field at ingest time.
+The one endpoint that IS blocked for any automated client, browser or not,
+is the actual file *download* (`/api/manager/download/...`) - see
+`download()` and README.md's "PDF download status" section. `requests`
+alone gets 403'd by Akamai even with a browser-like User-Agent (Akamai
+fingerprints the TLS/JS layer, not just headers) - Playwright drives a real
+browser engine, which passes that specific check, but not the download one.
 """
 from __future__ import annotations
 
@@ -34,8 +43,16 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from datetime import datetime
 
+import requests
 from playwright.sync_api import sync_playwright
 from tenacity import retry, stop_after_attempt, wait_exponential
+
+FOLDER_PATH_API = "https://publicfiles.fcc.gov/api/manager/folder/path.json"
+FOLDER_ID_API = "https://publicfiles.fcc.gov/api/manager/folder/id/{folder_id}.json"
+
+# sourceService param for the folder-path lookup - matches SERVICE_TO_PROFILE_SLUG
+# minus the "-profile" suffix; confirmed "tv" works, am/fm assumed analogous.
+SERVICE_TO_SOURCE = {"TV": "tv", "FM": "fm", "AM": "am"}
 
 ATOM_NS = {"atom": "http://www.w3.org/2005/Atom"}
 XHTML_NS = {"xhtml": "http://www.w3.org/1999/xhtml"}
@@ -70,10 +87,12 @@ class FccFiling:
 
     @property
     def is_political(self) -> bool:
-        """Each station's RSS feed is its full public-file upload history
-        (EEO reports, ownership filings, issues/programs lists, etc.), not
-        just political ads - callers that only want ad spend should filter
-        on this."""
+        """Each station's public file has other categories mixed in too
+        (EEO reports, ownership filings, issues/programs lists, etc.) -
+        callers that only want ad spend should filter on this. Always true
+        for filings from `walk_political_files()`, since that only ever
+        recurses under the Political Files folder; still relevant for
+        `fetch_station_feed()`, which returns everything in the feed."""
         return (self.category_path or "").startswith("Political Files/")
 
     @property
@@ -110,8 +129,10 @@ class FccClient:
         self._playwright = sync_playwright().start()
         self._browser = self._playwright.chromium.launch()
         self._context = self._browser.new_context()
+        self._http = requests.Session()
 
     def close(self):
+        self._http.close()
         self._context.close()
         self._browser.close()
         self._playwright.stop()
@@ -153,11 +174,85 @@ class FccClient:
         finally:
             page.close()
 
+    def resolve_entity_id(self, callsign: str, service: str) -> str:
+        """Bootstrap a station's numeric FCC entity/facility ID from its RSS
+        feed - every entry's title embeds it (e.g. "tv Entity 34470
+        uploaded..."). Needed by the folder-walk API below; there's no
+        working public search endpoint for callsign -> entity ID otherwise.
+        Raises if the station has never uploaded anything (feed is empty).
+        """
+        url = self._rss_url(callsign, service)
+        content = self._fetch_bytes(url)
+        m = re.search(rb"Entity (\d+)", content)
+        if not m:
+            raise RuntimeError(f"Could not resolve entity ID for {callsign} - feed may be empty")
+        return m.group(1).decode()
+
+    @retry(stop=stop_after_attempt(4), wait=wait_exponential(multiplier=1, min=2, max=30))
+    def _get_folder(self, folder_id: str, entity_id: str) -> dict:
+        resp = self._http.get(FOLDER_ID_API.format(folder_id=folder_id), params={"entityId": entity_id}, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+        if data.get("status") != "success":
+            raise RuntimeError(f"Folder API error for folder_id={folder_id}: {data}")
+        return data["folder"]
+
+    @retry(stop=stop_after_attempt(4), wait=wait_exponential(multiplier=1, min=2, max=30))
+    def _resolve_political_root(self, entity_id: str, service: str) -> str | None:
+        source = SERVICE_TO_SOURCE.get(service.upper())
+        resp = self._http.get(
+            FOLDER_PATH_API,
+            params={"folderPath": "Political Files", "entityId": entity_id, "sourceService": source},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        if data.get("status") != "success" or not data.get("folder"):
+            return None
+        return data["folder"][0]["entity_folder_id"]
+
+    def walk_political_files(self, callsign: str, service: str) -> list[FccFiling]:
+        """Recursively walk a station's Political Files folder tree via the
+        JSON folder API and return every filing found, complete - unlike
+        `fetch_station_feed()`, nothing can silently fall off a windowed
+        feed here. See module docstring."""
+        entity_id = self.resolve_entity_id(callsign, service)
+        root_id = self._resolve_political_root(entity_id, service)
+        if root_id is None:
+            return []
+        filings: list[FccFiling] = []
+        self._walk_folder(root_id, entity_id, callsign, service, filings)
+        return filings
+
+    def _walk_folder(self, folder_id: str, entity_id: str, callsign: str, service: str, out: list[FccFiling]) -> None:
+        folder = self._get_folder(folder_id, entity_id)
+        if folder.get("file_count") == "0":
+            return
+
+        for f in folder.get("files") or []:
+            filename = f["file_name"]
+            if f.get("file_extension"):
+                filename = f"{filename}.{f['file_extension']}"
+            out.append(FccFiling(
+                file_id=f["file_manager_id"],
+                download_url=f"https://publicfiles.fcc.gov/api/manager/download/{folder_id}/{f['file_manager_id']}.pdf",
+                filename=filename,
+                category_path=folder["folder_path"],
+                updated_ts=f.get("create_ts"),
+                callsign=callsign,
+                service=service,
+            ))
+
+        for sub in folder.get("subfolders") or []:
+            if sub.get("file_count") == "0":
+                continue
+            self._walk_folder(sub["entity_folder_id"], entity_id, callsign, service, out)
+
     def fetch_station_feed(self, callsign: str, service: str) -> list[FccFiling]:
-        """Fetch and parse a station's political-file RSS feed. Returns ALL
-        entries currently in the feed (the feed appears to be the station's
-        full upload history, not just recent items - dedup against the DB
-        handles "new since last run" filtering in ingest.py).
+        """Fetch and parse a station's RSS feed - capped at the 10 most
+        recent uploads (see module docstring). Kept for `probe_api.py` and
+        as the entity-ID bootstrap for `walk_political_files()`; ingest.py
+        uses the latter for actual filing discovery, not this.
         """
         url = self._rss_url(callsign, service)
         content = self._fetch_bytes(url)

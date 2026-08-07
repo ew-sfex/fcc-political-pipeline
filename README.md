@@ -19,62 +19,69 @@ is sorted out.
 
 ## How it works
 
-1. `src/fcc_client.py` fetches each configured station's political-file RSS
-   (Atom) feed via a headless-browser client (see "Data source" below for
-   why) and parses out filing metadata.
-2. `src/ingest.py` orchestrates: for each new filing (not already in the
-   DB), write a row to the `filings` table with purchaser, category, filing
-   date, and the file's `download_url` for later retrieval.
-3. `.github/workflows/ingest.yml` runs this on a schedule via GitHub Actions.
+1. `src/fcc_client.py` resolves each configured station's numeric FCC entity
+   ID (from its RSS feed — see below), then recursively walks that station's
+   **complete** `Political Files` folder tree via FCC's JSON folder API,
+   returning every filing found.
+2. `src/ingest.py` orchestrates: for each filing not already in the DB,
+   write a row to the `filings` table with purchaser, category, filing
+   date, and the file's `download_url` for later retrieval. Re-running is
+   safe and idempotent — already-ingested filings are skipped.
+3. `.github/workflows/ingest.yml` runs this 3×/day via GitHub Actions.
 
-## Data source: per-station RSS feeds
+## Data sources
 
-`src/fcc_client.py` pulls each station's political-file upload history from
-its FCC OPIF RSS (Atom) feed:
+The client uses two FCC endpoints, for two purposes:
+
+**1. Folder-walk JSON API (primary — file discovery).** FCC publishes an
+official, documented, no-auth-required JSON API
+(publicfiles.fcc.gov/developer, OpenAPI spec at `/api/manager//json/apis.json`).
+`walk_political_files()` uses it to recursively enumerate a station's
+`Political Files` tree (year → category → purchaser → files). This returns
+**complete** folder contents — nothing can silently fall off between runs
+regardless of upload volume. Each folder carries a recursive `file_count`,
+used to prune empty branches. Plain `requests` works here; no browser needed.
+
+Useful side effect: the folder path (e.g. `Political Files/2026/Non-Candidate
+Issue Ads/BOLD America`) ends in the purchaser / committee name, so
+`purchaser` is populated directly at ingest time from FCC's own taxonomy — no
+LLM extraction needed for that field.
+
+**2. Per-station RSS (Atom) feed (secondary — entity-ID bootstrap only).**
 
 ```
 https://publicfiles.fcc.gov/[tv|fm|am]-profile/[callsign]/rss/
 ```
 
-This was confirmed working by direct browser inspection on 2026-08-05. An
-earlier version of this project queried `https://www.fcc.gov/search/api`
-instead — that turned out to be the wrong endpoint entirely (the general
-fcc.gov website content search, not the political file index), and is why
-you may see references to a JSON search API filter scheme in old notes for
-this project. The RSS feed is the correct, working source.
+Used only to look up a station's numeric entity ID (embedded in each feed
+entry's title, e.g. "tv Entity 34470 uploaded…"), which the folder API
+needs — there's no working public callsign→entity-ID search endpoint
+otherwise. **The feed itself is capped at the 10 most recent uploads of any
+category**, no matter how much history exists (KGO-TV has 900+ political
+files back to 2017; its feed shows 10), which is exactly why it can't be the
+primary source — hence the folder walk above. An earlier version of this
+project instead queried `https://www.fcc.gov/search/api`, which turned out to
+be the wrong endpoint entirely (general fcc.gov site search, not the file
+index) — ignore any old notes referencing it.
 
-Useful side effect: the feed's category path (e.g. `Political
-Files/2026/Non-Candidate Issue Ads/BOLD America`) ends in the purchaser /
-committee name, so `purchaser` is populated directly at ingest time from the
-FCC's own taxonomy — no LLM extraction needed for that field.
-
-Each station's feed is its **entire** public file upload history, not just
-political ads — EEO reports, ownership filings, issues/programs lists, etc.
-all show up too (confirmed 2026-08-07: only ~57% of a typical feed is
-political). `ingest.py` filters to entries whose `category_path` starts with
-`Political Files/` via `FccFiling.is_political` before writing to the DB.
-
-FCC also publishes an official, documented, no-auth-required JSON API
-(publicfiles.fcc.gov/developer, OpenAPI spec at
-`/api/manager//json/apis.json`) covering the same folder/file metadata
-(`/api/manager/folder/id/{folderId}.json`, `/api/manager/file/id/{fileId}.json`).
-It's not currently used here since the RSS feed already gives a flat,
-per-station "everything uploaded" view in one request, whereas the JSON API
-is hierarchical (year → category → purchaser folders) and would need
-recursive traversal to enumerate. Worth revisiting if the RSS feed's shape
-ever changes.
+Note: the walk is rooted at the Political Files tree, so everything it
+returns is political by folder location. FCC's per-folder `folder_path`
+label is occasionally inconsistent with a folder's actual tree position
+(e.g. a genuine political-ad NAB form filed under a folder labeled "Issues
+and Programs Lists/…"), so a small number of rows may carry a non-`Political
+Files/` `category_path` even though they're real political filings reached
+via the political tree. `FccFiling.is_political` checks the label string, so
+it will read False for those edge cases.
 
 ### Akamai and headless browsing
 
-Both `www.fcc.gov` and `publicfiles.fcc.gov` sit behind an Akamai
-bot-detection layer. Plain `requests` calls get 403'd even with a
-browser-like `User-Agent` header — Akamai is fingerprinting the TLS/JS
-layer, not just headers. `fcc_client.py` works around this for the **RSS
-feed** by fetching via a real headless Chromium (Playwright) instead of
-`requests`. Confirmed working live as of 2026-08-07.
+`publicfiles.fcc.gov` sits behind an Akamai bot-detection layer. The **JSON
+folder API** is unaffected — plain `requests` works. Only the **RSS feed
+origin** 403s plain `requests` even with a browser-like `User-Agent` (Akamai
+fingerprints the TLS/JS layer, not just headers), so `fcc_client.py` fetches
+the feed via a real headless Chromium (Playwright). Confirmed live 2026-08-07.
 
-**Before relying on this at scale, run `scripts/probe_api.py`** to confirm
-the feed's current shape:
+**To sanity-check the RSS feed's shape** (used for probing, not ingest):
 ```bash
 python3 scripts/probe_api.py KGO-TV TV
 ```
@@ -134,9 +141,12 @@ python -m src.ingest
 
 ### 4. GitHub Actions
 
-The workflow in `.github/workflows/ingest.yml` runs daily. It only needs the
-`DATABASE_URL` secret set in the repo's Settings → Secrets and variables →
-Actions (Drive-related secrets aren't used yet — see "PDF download status").
+The workflow in `.github/workflows/ingest.yml` runs 3×/day (~7am/noon/4pm
+Pacific). It only needs the `DATABASE_URL` secret set in the repo's Settings
+→ Secrets and variables → Actions (Drive-related secrets aren't used yet —
+see "PDF download status"). Each run re-walks each station's full Political
+Files tree (~3–4 min total for the default 14-station list) and writes only
+filings not already in the DB — safe to run as often as you like.
 
 ### 5. Google Drive access (not yet needed)
 
@@ -162,7 +172,7 @@ layer them on later if useful.
 ```
 config/bay_area_stations.yaml   station list + market metadata
 src/config.py                   env/config loading
-src/fcc_client.py                FCC OPIF RSS feed client (Playwright-based)
+src/fcc_client.py                FCC OPIF client: JSON folder-walk + RSS bootstrap
 src/drive_client.py              Drive upload + properties tagging (not yet wired in)
 src/db.py                        SQLAlchemy models + engine (SQLite or Postgres)
 src/ingest.py                    orchestration entrypoint (metadata-only)

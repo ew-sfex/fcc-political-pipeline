@@ -28,4 +28,9 @@ def load_stations(path: str | None = None) -> list[Station]:
 DATABASE_URL = os.environ.get("DATABASE_URL") or "sqlite:///pipeline.db"
 GOOGLE_SERVICE_ACCOUNT_JSON = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON")
 DRIVE_ROOT_FOLDER_ID = os.environ.get("DRIVE_ROOT_FOLDER_ID")
-MAX_FILINGS_PER_RUN = int(os.environ.get("MAX_FILINGS_PER_RUN", "200"))
+# Safety valve on new rows written per run, not on how much of the folder
+# tree gets walked to find them (that's bounded by file_count pruning, not
+# this). Raised from 200 now that discovery is a full folder-tree walk
+# rather than a 10-item feed window - the first run against any station's
+# full history could otherwise take days to catch up across cap-limited runs.
+MAX_FILINGS_PER_RUN = int(os.environ.get("MAX_FILINGS_PER_RUN", "20000"))
