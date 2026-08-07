@@ -1,34 +1,31 @@
-"""Run this manually (with real internet access, not in a sandboxed CI dry
-run) to sanity-check the FCC search API's actual response shape before
-trusting src/fcc_client.py's parsing.
+"""Manual sanity check for a station's FCC OPIF RSS feed - confirms the feed
+loads, and prints parsed filings including the derived purchaser field.
 
 Usage:
-    python scripts/probe_api.py KGO-TV
+    python scripts/probe_api.py KGO-TV TV
 """
-import json
 import sys
 
-import requests
+sys.path.insert(0, ".")
 
-SEARCH_URL = "https://www.fcc.gov/search/api"
+from src.fcc_client import FccClient  # noqa: E402
 
 
 def main():
-    query = sys.argv[1] if len(sys.argv) > 1 else "KGO-TV"
-    filters = json.dumps([{"political_file_type": "PA"}])
-    params = {"q": query, "f": filters}
+    callsign = sys.argv[1] if len(sys.argv) > 1 else "KGO-TV"
+    service = sys.argv[2] if len(sys.argv) > 2 else "TV"
 
-    resp = requests.get(SEARCH_URL, params=params, timeout=30)
-    print(f"Status: {resp.status_code}")
-    print(f"URL: {resp.url}")
-    try:
-        data = resp.json()
-        print(json.dumps(data, indent=2)[:4000])
-        print("\n--- Top-level keys in response ---")
-        print(list(data.keys()) if isinstance(data, dict) else type(data))
-    except Exception as e:
-        print(f"Response was not JSON: {e}")
-        print(resp.text[:2000])
+    with FccClient() as client:
+        filings = client.fetch_station_feed(callsign, service)
+
+    print(f"Fetched {len(filings)} entries for {callsign} ({service})\n")
+    for f in filings[:10]:
+        print(f"- {f.filename}")
+        print(f"    purchaser: {f.purchaser}")
+        print(f"    category:  {f.category_path}")
+        print(f"    updated:   {f.updated_ts}")
+        print(f"    url:       {f.download_url}")
+        print()
 
 
 if __name__ == "__main__":

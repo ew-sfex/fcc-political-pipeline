@@ -20,9 +20,12 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Install Playwright browser
+        run: playwright install --with-deps chromium
+
+      # Metadata-only for now (see README) - Drive/PDF secrets not needed
+      # until FCC's download endpoint is reachable programmatically.
       - name: Run ingest
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
-          DRIVE_ROOT_FOLDER_ID: ${{ secrets.DRIVE_ROOT_FOLDER_ID }}
         run: python -m src.ingest

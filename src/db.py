@@ -30,30 +30,31 @@ class Filing(Base):
     id = Column(Integer, primary_key=True)
 
     # --- FCC identifiers ---
-    fcc_file_id = Column(String, nullable=False)       # file_id from FCC API
-    folder_id = Column(String)
-    file_manager_id = Column(String)
-    entity_id = Column(String)
+    fcc_file_id = Column(String, nullable=False)       # GUID from RSS <id>
 
     # --- Station / market tagging ---
     callsign = Column(String, nullable=False, index=True)
     service = Column(String)                            # TV / AM / FM
     market = Column(String, index=True)
-    political_file_type = Column(String)
-    office_type = Column(String)
+    category_path = Column(Text)                         # e.g. "Political Files/2026/Non-Candidate Issue Ads/BOLD America"
     campaign_year = Column(String)
 
     # --- File info ---
     file_name = Column(String)
-    file_extension = Column(String)
-    filed_date = Column(DateTime)                        # create_ts from FCC
+    filed_date = Column(DateTime)                        # <updated> from FCC RSS entry
+    download_url = Column(Text)                           # direct FCC PDF link (for reference/re-download)
 
     # --- Storage ---
     drive_file_id = Column(String)
     drive_web_link = Column(Text)
 
-    # --- Phase 2: extraction (nullable until populated) ---
-    purchaser = Column(String, index=True)               # advertiser/agency, once extracted
+    # --- Purchaser: parsed directly from category_path at ingest time (the
+    # RSS feed's category taxonomy already ends in the advertiser/committee
+    # name) - populated at ingest, no LLM needed for this field. ---
+    purchaser = Column(String, index=True)
+
+    # --- Phase 2: extraction of amounts/dates/doc-type from the PDF body
+    # itself (nullable until populated) ---
     document_type = Column(String)                       # INVOICE / ORDER / CONTRACT / OTHER
     gross_amount = Column(Float)
     flight_start = Column(DateTime)
