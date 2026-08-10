@@ -215,6 +215,34 @@ the newsroom", in order:
 Changing the coverage window later is just the `BACKFILL_SINCE` env/secret —
 no code change.
 
+## Newsroom dashboard (shareable, read-only)
+
+`dashboard/streamlit_app.py` is a read-only web page for colleagues: browse,
+sort (newest-first), filter (station, race/category), and full-text search
+every filing, with a link to each source PDF and a CSV export. It only runs
+SELECTs — viewers can't change or delete anything, and they need no Supabase
+login. Run locally with `streamlit run dashboard/streamlit_app.py` (falls
+back to the local SQLite DB).
+
+To publish a public link on **Streamlit Community Cloud** (free):
+1. Go to [share.streamlit.io](https://share.streamlit.io), sign in with the
+   GitHub account that can see this repo (`ew-sfex`).
+2. **Create app → Deploy from GitHub.** Repo: `ew-sfex/fcc-political-pipeline`,
+   branch `main`, **Main file path: `dashboard/streamlit_app.py`**.
+3. **Advanced settings → Secrets**, add the same pooled connection string:
+   ```
+   DATABASE_URL = "postgresql://postgres.<ref>:<password>@...pooler.supabase.com:6543/postgres"
+   ```
+4. Deploy. You get a public `https://<name>.streamlit.app` URL — paste that in
+   Slack. It reads live from the same DB the pipeline writes to, so it stays
+   current on its own.
+
+Note: `purchaser` is the last folder segment of the FCC category path, so for
+stations that nest an extra subfolder (e.g. `.../<committee>/Invoices`) it can
+read as "Invoices"/"Contracts" rather than the committee. Search matches the
+full path, so searching a committee name still surfaces those — but tidying
+`purchaser` into a clean advertiser name is a known follow-up.
+
 ## Repo layout
 
 ```
@@ -225,6 +253,7 @@ src/drive_client.py              Drive upload + properties tagging (not yet wire
 src/db.py                        SQLAlchemy models + engine (SQLite or Postgres)
 src/ingest.py                    orchestration entrypoint (metadata-only)
 src/notify.py                    Slack digest of newly-ingested filings
+dashboard/streamlit_app.py       read-only newsroom dashboard (Streamlit)
 scripts/probe_api.py             manual script to sanity-check the FCC feed shape
 .github/workflows/ingest.yml     scheduled run
 ```
