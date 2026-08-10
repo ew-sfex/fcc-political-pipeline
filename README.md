@@ -199,18 +199,18 @@ the newsroom", in order:
    pooled connection string.
 2. **Set repo secrets** (Settings → Secrets and variables → Actions):
    `DATABASE_URL` (required) and `SLACK_WEBHOOK_URL` (for alerts).
-3. **Run the one-time history backfill against the hosted DB, alerts
-   suppressed** so it doesn't post thousands of lines to Slack. From a
-   machine with the repo + deps, pointing at the same DB:
+3. **Run the one-time history backfill, alerts suppressed** (so it doesn't
+   post thousands of lines to Slack). Easiest, no local setup: GitHub →
+   **Actions → FCC Political Filings Ingest → Run workflow**, tick **"Skip
+   Slack alerts"**, run it. This walks every station's Political Files tree
+   back to `BACKFILL_SINCE` (default 2025-01-01) and populates the DB
+   (~3–4 min). Or, from a machine with the repo + deps:
    ```bash
    DATABASE_URL='<supabase pooled URL>' SUPPRESS_ALERTS=1 python -m src.ingest
    ```
-   This walks every station's Political Files tree back to `BACKFILL_SINCE`
-   (default 2025-01-01) and populates the DB. Alternatively, trigger the
-   workflow manually once (Actions → Run workflow) — but temporarily set the
-   `SUPPRESS_ALERTS` env in the workflow, or expect a large first alert.
-4. **Let the schedule take over.** Subsequent 3×/day runs find only genuinely
-   new filings and Slack-alert on those. Nothing else to do.
+4. **Let the schedule take over.** Subsequent 3×/day runs (and any manual run
+   with the box unchecked) find only genuinely new filings and Slack-alert on
+   those. Nothing else to do.
 
 Changing the coverage window later is just the `BACKFILL_SINCE` env/secret —
 no code change.
