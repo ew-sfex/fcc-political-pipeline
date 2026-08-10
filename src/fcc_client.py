@@ -41,7 +41,7 @@ from __future__ import annotations
 import re
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 
 import requests
 from playwright.sync_api import sync_playwright
@@ -93,7 +93,8 @@ class FccFiling:
         for filings from `walk_political_files()`, since that only ever
         recurses under the Political Files folder; still relevant for
         `fetch_station_feed()`, which returns everything in the feed."""
-        return (self.category_path or "").startswith("Political Files/")
+        cp = self.category_path or ""
+        return cp == "Political Files" or cp.startswith("Political Files/")
 
     @property
     def purchaser(self) -> str | None:
@@ -211,42 +212,85 @@ class FccClient:
             return None
         return data["folder"][0]["entity_folder_id"]
 
-    def walk_political_files(self, callsign: str, service: str) -> list[FccFiling]:
+    def walk_political_files(
+        self, callsign: str, service: str, since: date | None = None
+    ) -> list[FccFiling]:
         """Recursively walk a station's Political Files folder tree via the
         JSON folder API and return every filing found, complete - unlike
         `fetch_station_feed()`, nothing can silently fall off a windowed
-        feed here. See module docstring."""
+        feed here. See module docstring.
+
+        `since`: if given, only filings uploaded on/after this date are
+        returned. Enforced two ways: (1) whole year-folders below `since`'s
+        year are pruned at the root without recursing (speed), and (2) every
+        individual file is checked against `since` by its create timestamp
+        (correctness - catches anything mis-filed under a newer year folder).
+        """
         entity_id = self.resolve_entity_id(callsign, service)
         root_id = self._resolve_political_root(entity_id, service)
         if root_id is None:
             return []
         filings: list[FccFiling] = []
-        self._walk_folder(root_id, entity_id, callsign, service, filings)
+        self._walk_folder(root_id, entity_id, callsign, service, filings, since, "Political Files", is_root=True)
         return filings
 
-    def _walk_folder(self, folder_id: str, entity_id: str, callsign: str, service: str, out: list[FccFiling]) -> None:
+    def _walk_folder(
+        self,
+        folder_id: str,
+        entity_id: str,
+        callsign: str,
+        service: str,
+        out: list[FccFiling],
+        since: date | None,
+        current_path: str,
+        is_root: bool = False,
+    ) -> None:
         folder = self._get_folder(folder_id, entity_id)
         if folder.get("file_count") == "0":
             return
 
+        # Use the path we actually traversed to get here, NOT the folder's
+        # self-reported `folder_path`. FCC cross-files some folders: e.g.
+        # KGO-TV's "Building A Better California" is listed as a child of
+        # Political Files/2026/Non-Candidate Issue Ads but self-reports a
+        # `folder_path` under "Issues and Programs Lists" (confirmed
+        # 2026-08-10). Trusting the self-report would both mislabel the row
+        # and push it outside "Political Files/". The traversal path is
+        # authoritative for how we categorize a filing.
         for f in folder.get("files") or []:
             filename = f["file_name"]
             if f.get("file_extension"):
                 filename = f"{filename}.{f['file_extension']}"
-            out.append(FccFiling(
+            filing = FccFiling(
                 file_id=f["file_manager_id"],
                 download_url=f"https://publicfiles.fcc.gov/api/manager/download/{folder_id}/{f['file_manager_id']}.pdf",
                 filename=filename,
-                category_path=folder["folder_path"],
+                category_path=current_path,
                 updated_ts=f.get("create_ts"),
                 callsign=callsign,
                 service=service,
-            ))
+            )
+            if since is not None:
+                dt = filing.updated_dt
+                if dt is not None and dt.date() < since:
+                    continue
+            out.append(filing)
 
         for sub in folder.get("subfolders") or []:
             if sub.get("file_count") == "0":
                 continue
-            self._walk_folder(sub["entity_folder_id"], entity_id, callsign, service, out)
+            name = (sub.get("folder_name") or "").strip()
+            # At the root, immediate subfolders are election-cycle year
+            # folders ("2017".."2026") - prune whole years below the cutoff
+            # so we never walk them. Only applied at root, where names are
+            # reliably years (a deeper folder could be a committee literally
+            # named "2024"; the per-file guard above still bounds those).
+            if is_root and since is not None:
+                if name.isdigit() and len(name) == 4 and int(name) < since.year:
+                    continue
+            self._walk_folder(
+                sub["entity_folder_id"], entity_id, callsign, service, out, since, f"{current_path}/{name}"
+            )
 
     def fetch_station_feed(self, callsign: str, service: str) -> list[FccFiling]:
         """Fetch and parse a station's RSS feed - capped at the 10 most

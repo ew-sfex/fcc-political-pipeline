@@ -21,7 +21,7 @@ import sys
 
 from sqlalchemy import select
 
-from . import config
+from . import config, notify
 from .db import Filing, get_session, init_db
 from .fcc_client import FccClient
 
@@ -39,24 +39,25 @@ def run():
     session = get_session()
 
     stations = config.load_stations()
-    log.info("Loaded %d stations for market pull", len(stations))
+    log.info("Loaded %d stations for market pull (filings since %s)", len(stations), config.BACKFILL_SINCE)
 
+    new_filings: list[Filing] = []
     with FccClient() as fcc:
-        processed = _ingest_stations(fcc, session, stations)
+        _ingest_stations(fcc, session, stations, new_filings)
 
-    log.info("Done. %d new filings ingested.", processed)
+    log.info("Done. %d new filings ingested.", len(new_filings))
+    notify.post_new_filings(new_filings)
 
 
-def _ingest_stations(fcc, session, stations) -> int:
-    processed = 0
+def _ingest_stations(fcc, session, stations, new_filings: list) -> None:
     for station in stations:
-        if processed >= config.MAX_FILINGS_PER_RUN:
+        if len(new_filings) >= config.MAX_FILINGS_PER_RUN:
             log.warning("Hit MAX_FILINGS_PER_RUN cap (%d), stopping early", config.MAX_FILINGS_PER_RUN)
             break
 
         log.info("Walking Political Files tree for %s (%s)", station.callsign, station.service)
         try:
-            filings = fcc.walk_political_files(station.callsign, station.service)
+            filings = fcc.walk_political_files(station.callsign, station.service, since=config.BACKFILL_SINCE)
         except Exception:
             log.exception("Folder walk failed for %s - skipping station this run", station.callsign)
             continue
@@ -64,7 +65,7 @@ def _ingest_stations(fcc, session, stations) -> int:
         log.info("%s: %d political filings found", station.callsign, len(filings))
 
         for filing in filings:
-            if processed >= config.MAX_FILINGS_PER_RUN:
+            if len(new_filings) >= config.MAX_FILINGS_PER_RUN:
                 break
             if already_ingested(session, filing.file_id):
                 continue
@@ -83,10 +84,8 @@ def _ingest_stations(fcc, session, stations) -> int:
             )
             session.add(row)
             session.commit()
-            processed += 1
+            new_filings.append(row)
             log.info("Ingested %s (%s, purchaser=%s)", filing.filename, station.callsign, filing.purchaser)
-
-    return processed
 
 
 if __name__ == "__main__":

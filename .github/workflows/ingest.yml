@@ -32,7 +32,10 @@ jobs:
 
       # Metadata-only for now (see README) - Drive/PDF secrets not needed
       # until FCC's download endpoint is reachable programmatically.
+      # SLACK_WEBHOOK_URL drives new-filing alerts; if the secret is unset,
+      # alerts are simply skipped (ingest still runs).
       - name: Run ingest
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: python -m src.ingest

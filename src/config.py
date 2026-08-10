@@ -1,5 +1,6 @@
 """Environment and station-list config loading."""
 import os
+from datetime import date
 import yaml
 from dataclasses import dataclass
 from dotenv import load_dotenv
@@ -34,3 +35,16 @@ DRIVE_ROOT_FOLDER_ID = os.environ.get("DRIVE_ROOT_FOLDER_ID")
 # rather than a 10-item feed window - the first run against any station's
 # full history could otherwise take days to catch up across cap-limited runs.
 MAX_FILINGS_PER_RUN = int(os.environ.get("MAX_FILINGS_PER_RUN", "20000"))
+
+# Only ingest filings uploaded on/after this date (by FCC create timestamp).
+# Older year-folders are pruned without walking. ISO date, YYYY-MM-DD.
+BACKFILL_SINCE = date.fromisoformat(os.environ.get("BACKFILL_SINCE", "2025-01-01"))
+
+# Slack incoming-webhook URL for new-filing alerts. Unset -> alerts are a
+# no-op (fine for local runs). Set as a GitHub Actions secret in production.
+SLACK_WEBHOOK_URL = os.environ.get("SLACK_WEBHOOK_URL")
+
+# When true, skip Slack alerts for this run regardless of new-filing count.
+# Set for the one-off history backfill so it doesn't fire a giant alert;
+# leave unset for scheduled incremental runs.
+SUPPRESS_ALERTS = os.environ.get("SUPPRESS_ALERTS", "").lower() in ("1", "true", "yes")

@@ -26,8 +26,17 @@ is sorted out.
 2. `src/ingest.py` orchestrates: for each filing not already in the DB,
    write a row to the `filings` table with purchaser, category, filing
    date, and the file's `download_url` for later retrieval. Re-running is
-   safe and idempotent — already-ingested filings are skipped.
-3. `.github/workflows/ingest.yml` runs this 3×/day via GitHub Actions.
+   safe and idempotent — already-ingested filings are skipped. Only filings
+   uploaded on/after `BACKFILL_SINCE` (default `2025-01-01`) are ingested.
+3. `src/notify.py` posts a Slack digest of any newly-ingested filings after
+   each run (via `SLACK_WEBHOOK_URL`; a no-op if that's unset).
+4. `.github/workflows/ingest.yml` runs this 3×/day via GitHub Actions.
+
+Filing categorization uses the folder path we actually **traversed**, not
+each folder's self-reported `folder_path` — FCC cross-files some folders
+(e.g. a committee folder listed under Political Files but self-reporting a
+path under "Issues and Programs Lists"), and the traversal path is the
+authoritative signal for whether/how a filing is political.
 
 ## Data sources
 
@@ -127,10 +136,23 @@ broadcast callsigns — **verify/expand it**; the FCC's own entity search
 (https://publicfiles.fcc.gov/find) is the source of truth for which stations
 have online political files in your target market.
 
-### 3. Environment variables (for local runs)
+### 3. Slack alerts (new-filing notifications)
 
-Copy `.env.example` to `.env` and fill in values (optional in metadata-only
-mode — everything defaults to local SQLite with no external creds needed).
+Each run posts a digest of newly-ingested filings to Slack. To enable:
+
+1. Create a Slack **incoming webhook** for the target channel
+   (api.slack.com/messaging/webhooks) — it gives you a URL.
+2. Put it in the GitHub secret `SLACK_WEBHOOK_URL` (and/or local `.env`).
+
+If unset, alerts are simply skipped. The one-off history backfill should be
+run with `SUPPRESS_ALERTS=1` so it doesn't fire one giant alert (see the
+runbook below); scheduled incremental runs then alert only on genuinely new
+filings.
+
+### 4. Environment variables (for local runs)
+
+Copy `.env.example` to `.env` and fill in values (all optional for a local
+SQLite run — everything defaults sensibly with no external creds needed).
 Locally:
 
 ```bash
@@ -139,16 +161,17 @@ playwright install chromium
 python -m src.ingest
 ```
 
-### 4. GitHub Actions
+### 5. GitHub Actions
 
 The workflow in `.github/workflows/ingest.yml` runs 3×/day (~7am/noon/4pm
-Pacific). It only needs the `DATABASE_URL` secret set in the repo's Settings
-→ Secrets and variables → Actions (Drive-related secrets aren't used yet —
-see "PDF download status"). Each run re-walks each station's full Political
-Files tree (~3–4 min total for the default 14-station list) and writes only
-filings not already in the DB — safe to run as often as you like.
+Pacific). It needs the `DATABASE_URL` secret (and `SLACK_WEBHOOK_URL` for
+alerts) set in the repo's Settings → Secrets and variables → Actions
+(Drive-related secrets aren't used yet — see "PDF download status"). Each
+run re-walks each station's full Political Files tree (~3–4 min total for
+the default 14-station list) and writes only filings not already in the DB —
+safe to run as often as you like.
 
-### 5. Google Drive access (not yet needed)
+### 6. Google Drive access (not yet needed)
 
 Deferred until PDF downloads are unblocked (see above). When that's solved,
 `src/drive_client.py` is already written for it — use a service account
@@ -167,6 +190,31 @@ folder. This is different from Drive **Labels**, which require Workspace admin
 setup — we're deliberately not using Labels here for portability, but you can
 layer them on later if useful.
 
+## Going live (runbook)
+
+To take this from "runs on demand locally" to "runs itself 3×/day and alerts
+the newsroom", in order:
+
+1. **Stand up Postgres.** Create the Supabase project (Setup §1), get the
+   pooled connection string.
+2. **Set repo secrets** (Settings → Secrets and variables → Actions):
+   `DATABASE_URL` (required) and `SLACK_WEBHOOK_URL` (for alerts).
+3. **Run the one-time history backfill against the hosted DB, alerts
+   suppressed** so it doesn't post thousands of lines to Slack. From a
+   machine with the repo + deps, pointing at the same DB:
+   ```bash
+   DATABASE_URL='<supabase pooled URL>' SUPPRESS_ALERTS=1 python -m src.ingest
+   ```
+   This walks every station's Political Files tree back to `BACKFILL_SINCE`
+   (default 2025-01-01) and populates the DB. Alternatively, trigger the
+   workflow manually once (Actions → Run workflow) — but temporarily set the
+   `SUPPRESS_ALERTS` env in the workflow, or expect a large first alert.
+4. **Let the schedule take over.** Subsequent 3×/day runs find only genuinely
+   new filings and Slack-alert on those. Nothing else to do.
+
+Changing the coverage window later is just the `BACKFILL_SINCE` env/secret —
+no code change.
+
 ## Repo layout
 
 ```
@@ -176,6 +224,7 @@ src/fcc_client.py                FCC OPIF client: JSON folder-walk + RSS bootstr
 src/drive_client.py              Drive upload + properties tagging (not yet wired in)
 src/db.py                        SQLAlchemy models + engine (SQLite or Postgres)
 src/ingest.py                    orchestration entrypoint (metadata-only)
+src/notify.py                    Slack digest of newly-ingested filings
 scripts/probe_api.py             manual script to sanity-check the FCC feed shape
 .github/workflows/ingest.yml     scheduled run
 ```
