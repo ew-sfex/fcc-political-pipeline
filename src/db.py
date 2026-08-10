@@ -73,7 +73,13 @@ _SessionLocal = None
 def get_engine():
     global _engine
     if _engine is None:
-        _engine = create_engine(config.DATABASE_URL, future=True)
+        url = config.DATABASE_URL
+        # Supabase/Heroku hand out "postgres://..." URLs, but SQLAlchemy only
+        # recognizes the "postgresql://" scheme (bare "postgres" fails with a
+        # "Can't load plugin" error). Normalize so either form just works.
+        if url.startswith("postgres://"):
+            url = "postgresql://" + url[len("postgres://"):]
+        _engine = create_engine(url, future=True)
     return _engine
 
 
