@@ -103,8 +103,13 @@ def _format_message(filings: list) -> str:
         lines.append(f"…and {n - MAX_ITEMIZED} more.")
     lines.append("")
     lines.append(
-        f"_Browse & search all filings in the <{config.DASHBOARD_URL}|dashboard ↗>. "
-        "If a document link shows \"Access Denied,\" open its FCC folder link first "
-        "(or visit publicfiles.fcc.gov), then the document opens._"
+        ":warning: _The filename opens the document straight from the FCC and may show "
+        "*\"Access Denied\"* if you haven't opened publicfiles.fcc.gov in the last little "
+        "while — that's the FCC's bot-protection, not a broken link. If it happens, click "
+        "*FCC folder* first (it always loads); that opens the folder and clears the block, "
+        "then the document link works._"
+    )
+    lines.append(
+        f"_Browse & search all filings in the <{config.DASHBOARD_URL}|dashboard ↗>._"
     )
     return "\n".join(lines)
