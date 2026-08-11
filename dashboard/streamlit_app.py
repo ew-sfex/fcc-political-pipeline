@@ -62,6 +62,31 @@ def _race_type(category_path: str) -> str:
     return parts[2] if len(parts) > 2 else "(uncategorized)"
 
 
+_SERVICE_SLUG = {"TV": "tv-profile", "AM": "am-profile", "FM": "fm-profile"}
+
+
+def _fcc_folder_page(callsign: str, service: str) -> str:
+    """Browsable HTML page for the station's political files. Reliable to
+    link to (FCC's Akamai layer serves normal page navigations to real
+    browsers), and landing here establishes the session that makes the
+    direct download links below work."""
+    slug = _SERVICE_SLUG.get((service or "").upper(), "tv-profile")
+    return f"https://publicfiles.fcc.gov/{slug}/{str(callsign).lower()}/political-files"
+
+
+def _direct_url(download_url: str, file_name: str) -> str:
+    """Correct the stored download URL's extension at display time. Older
+    rows were written with a hardcoded '.pdf' even for Word docs; the real
+    extension comes from the filename. (New rows are stored correctly.)"""
+    url = download_url or ""
+    fn = file_name or ""
+    if url.endswith(".pdf") and "." in fn:
+        ext = fn.rsplit(".", 1)[-1]
+        if ext and ext.lower() != "pdf":
+            url = url[:-4] + "." + ext
+    return url
+
+
 st.set_page_config(page_title="Bay Area Political Ad Filings", page_icon="🗳️", layout="wide")
 
 st.title("🗳️ Bay Area Political Ad Filings")
@@ -78,6 +103,8 @@ if df.empty:
     st.stop()
 
 df["race_type"] = df["category_path"].map(_race_type)
+df["fcc_page"] = df.apply(lambda r: _fcc_folder_page(r["callsign"], r["service"]), axis=1)
+df["direct"] = df.apply(lambda r: _direct_url(r["download_url"], r["file_name"]), axis=1)
 
 # --- Filters ---
 c1, c2, c3 = st.columns([2, 2, 3])
@@ -111,7 +138,7 @@ if not view["filed_date"].isna().all():
     m3.metric("Most recent filing", view["filed_date"].max().strftime("%b %d, %Y"))
 
 st.dataframe(
-    view[["filed_date", "callsign", "purchaser", "race_type", "file_name", "download_url"]],
+    view[["filed_date", "callsign", "purchaser", "race_type", "file_name", "direct", "fcc_page"]],
     hide_index=True,
     use_container_width=True,
     column_config={
@@ -120,8 +147,17 @@ st.dataframe(
         "purchaser": "Advertiser / committee",
         "race_type": "Race / category",
         "file_name": "Document",
-        "download_url": st.column_config.LinkColumn("Source PDF", display_text="Open ↗"),
+        "direct": st.column_config.LinkColumn("Direct file", display_text="Open ↗"),
+        "fcc_page": st.column_config.LinkColumn("FCC page", display_text="Browse ↗"),
     },
+)
+
+st.info(
+    "**Direct file** opens the document straight from the FCC. If it says "
+    "\"Access Denied\", that's FCC's bot-protection blocking cold outside links — "
+    "click **FCC page** first (or visit publicfiles.fcc.gov) to establish an FCC "
+    "session, then the Direct file links work.",
+    icon="ℹ️",
 )
 
 st.caption(

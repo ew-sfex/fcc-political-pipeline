@@ -258,12 +258,16 @@ class FccClient:
         # and push it outside "Political Files/". The traversal path is
         # authoritative for how we categorize a filing.
         for f in folder.get("files") or []:
+            # Use the file's real extension - ~10% of political filings are
+            # Word docs (.docx traffic instructions etc.), not PDFs, and the
+            # download URL's extension must match or FCC won't serve it.
+            ext = f.get("file_extension") or "pdf"
             filename = f["file_name"]
             if f.get("file_extension"):
-                filename = f"{filename}.{f['file_extension']}"
+                filename = f"{filename}.{ext}"
             filing = FccFiling(
                 file_id=f["file_manager_id"],
-                download_url=f"https://publicfiles.fcc.gov/api/manager/download/{folder_id}/{f['file_manager_id']}.pdf",
+                download_url=f"https://publicfiles.fcc.gov/api/manager/download/{folder_id}/{f['file_manager_id']}.{ext}",
                 filename=filename,
                 category_path=current_path,
                 updated_ts=f.get("create_ts"),
