@@ -16,6 +16,7 @@ Run locally against the SQLite test DB:
 from __future__ import annotations
 
 import os
+import re
 
 import pandas as pd
 import streamlit as st
@@ -63,15 +64,20 @@ def _race_type(category_path: str) -> str:
 
 
 _SERVICE_SLUG = {"TV": "tv-profile", "AM": "am-profile", "FM": "fm-profile"}
+_DOWNLOAD_FOLDER_RE = re.compile(r"/manager/download/([^/]+)/")
 
 
-def _fcc_folder_page(callsign: str, service: str) -> str:
-    """Browsable HTML page for the station's political files. Reliable to
-    link to (FCC's Akamai layer serves normal page navigations to real
-    browsers), and landing here establishes the session that makes the
-    direct download links below work."""
+def _fcc_folder_page(callsign: str, service: str, download_url: str) -> str:
+    """Deep link to the FCC folder that contains this filing. FCC's browse UI
+    resolves a folder by the GUID embedded in the download URL alone (path
+    segments are cosmetic), so we land the reader on the exact folder, not the
+    station root. Falls back to the station root if the GUID can't be parsed.
+    Either way it loads reliably (FCC serves normal page navigations to real
+    browsers) and establishes the session that makes the direct links work."""
     slug = _SERVICE_SLUG.get((service or "").upper(), "tv-profile")
-    return f"https://publicfiles.fcc.gov/{slug}/{str(callsign).lower()}/political-files"
+    base = f"https://publicfiles.fcc.gov/{slug}/{str(callsign).lower()}/political-files"
+    m = _DOWNLOAD_FOLDER_RE.search(download_url or "")
+    return f"{base}/{m.group(1)}" if m else base
 
 
 def _direct_url(download_url: str, file_name: str) -> str:
@@ -103,7 +109,7 @@ if df.empty:
     st.stop()
 
 df["race_type"] = df["category_path"].map(_race_type)
-df["fcc_page"] = df.apply(lambda r: _fcc_folder_page(r["callsign"], r["service"]), axis=1)
+df["fcc_page"] = df.apply(lambda r: _fcc_folder_page(r["callsign"], r["service"], r["download_url"]), axis=1)
 df["direct"] = df.apply(lambda r: _direct_url(r["download_url"], r["file_name"]), axis=1)
 
 # --- Filters ---
