@@ -44,6 +44,14 @@ BACKFILL_SINCE = date.fromisoformat(os.environ.get("BACKFILL_SINCE", "2025-01-01
 # no-op (fine for local runs). Set as a GitHub Actions secret in production.
 SLACK_WEBHOOK_URL = os.environ.get("SLACK_WEBHOOK_URL")
 
+# Public URL of the read-only dashboard, linked from Slack alerts. Defaults
+# to the deployed Streamlit app; override with the DASHBOARD_URL env var if
+# the app is redeployed elsewhere.
+DASHBOARD_URL = os.environ.get(
+    "DASHBOARD_URL",
+    "https://fcc-political-pipeline-2wdzk4ltim5blhgzkaj6ut.streamlit.app",
+)
+
 # When true, skip Slack alerts for this run regardless of new-filing count.
 # Set for the one-off history backfill so it doesn't fire a giant alert;
 # leave unset for scheduled incremental runs.

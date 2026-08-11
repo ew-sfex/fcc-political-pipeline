@@ -24,6 +24,28 @@ log = logging.getLogger("notify")
 # day. The DB still has every row regardless.
 MAX_ITEMIZED = 25
 
+_SERVICE_SLUG = {"TV": "tv-profile", "AM": "am-profile", "FM": "fm-profile"}
+
+
+def _fcc_folder_page(callsign: str, service: str) -> str:
+    """Browsable HTML page for the station's political files. Loads reliably
+    (unlike the raw download endpoint) and establishes the FCC session that
+    makes the direct-download link below work afterward."""
+    slug = _SERVICE_SLUG.get((service or "").upper(), "tv-profile")
+    return f"https://publicfiles.fcc.gov/{slug}/{str(callsign).lower()}/political-files"
+
+
+def _direct_url(download_url: str, file_name: str) -> str:
+    """Correct the stored download URL's extension at display time - older
+    rows hardcoded '.pdf' even for Word docs (see fcc_client)."""
+    url = download_url or ""
+    fn = file_name or ""
+    if url.endswith(".pdf") and "." in fn:
+        ext = fn.rsplit(".", 1)[-1]
+        if ext and ext.lower() != "pdf":
+            url = url[:-4] + "." + ext
+    return url
+
 
 def post_new_filings(filings: list) -> None:
     """Send a Slack digest for the given newly-ingested filings (a list of
@@ -60,7 +82,18 @@ def _format_message(filings: list) -> str:
         parts = [p for p in (f.category_path or "").split("/") if p][1:-1]
         context = " / ".join(parts[1:]) if len(parts) > 1 else (parts[0] if parts else "")
         tag = f" — _{context}_" if context else ""
-        lines.append(f"• *{f.callsign}* — {purchaser}{tag}: {f.file_name}")
+        # Slack link syntax is <url|text>. Filename links to the direct PDF;
+        # "FCC folder" is the reliable fallback that also unlocks the direct
+        # link (see _fcc_folder_page).
+        doc = f"<{_direct_url(f.download_url, f.file_name)}|{f.file_name}>"
+        folder = f"<{_fcc_folder_page(f.callsign, f.service)}|FCC folder ↗>"
+        lines.append(f"• *{f.callsign}* — {purchaser}{tag}: {doc}  ·  {folder}")
     if n > MAX_ITEMIZED:
         lines.append(f"…and {n - MAX_ITEMIZED} more.")
+    lines.append("")
+    lines.append(
+        f"_Browse & search all filings in the <{config.DASHBOARD_URL}|dashboard ↗>. "
+        "If a document link shows \"Access Denied,\" open its FCC folder link first "
+        "(or visit publicfiles.fcc.gov), then the document opens._"
+    )
     return "\n".join(lines)
