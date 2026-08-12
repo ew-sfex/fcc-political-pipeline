@@ -21,7 +21,12 @@ on:
 jobs:
   ingest:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # The folder walk grows with the election cycle (big affiliates accrue
+    # many 2026 committee folders); runs that finished in ~3 min in early
+    # Aug hit 30 min by mid-Aug and were cancelled before the alert step at
+    # the end. 60 gives headroom; if runs approach this again, parallelize
+    # the per-station walks rather than just raising it further.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
