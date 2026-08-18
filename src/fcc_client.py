@@ -127,16 +127,29 @@ class FccClient:
     """
 
     def __init__(self):
-        self._playwright = sync_playwright().start()
-        self._browser = self._playwright.chromium.launch()
-        self._context = self._browser.new_context()
+        # Browser is launched lazily on first use - only resolve_entity_id /
+        # fetch_station_feed / download need it. When every station's
+        # entity_id is cached in config, a scheduled walk never touches
+        # Playwright at all, so we don't pay the launch cost. The Playwright
+        # sync API is NOT thread-safe, so it must only be used from the main
+        # thread (the parallel folder walk uses plain requests, below).
+        self._playwright = None
+        self._browser = None
+        self._context = None
         self._http = requests.Session()
+
+    def _ensure_browser(self):
+        if self._context is None:
+            self._playwright = sync_playwright().start()
+            self._browser = self._playwright.chromium.launch()
+            self._context = self._browser.new_context()
 
     def close(self):
         self._http.close()
-        self._context.close()
-        self._browser.close()
-        self._playwright.stop()
+        if self._context is not None:
+            self._context.close()
+            self._browser.close()
+            self._playwright.stop()
 
     def __enter__(self):
         return self
@@ -155,6 +168,7 @@ class FccClient:
         """Fetch raw response bytes for a URL via the browser, however the
         browser chooses to handle the response - as an inline navigation
         (feed XML) or as a triggered file download (PDFs, sometimes)."""
+        self._ensure_browser()
         page = self._context.new_page()
         try:
             try:
@@ -189,9 +203,13 @@ class FccClient:
             raise RuntimeError(f"Could not resolve entity ID for {callsign} - feed may be empty")
         return m.group(1).decode()
 
-    @retry(stop=stop_after_attempt(4), wait=wait_exponential(multiplier=1, min=2, max=30))
-    def _get_folder(self, folder_id: str, entity_id: str) -> dict:
-        resp = self._http.get(FOLDER_ID_API.format(folder_id=folder_id), params={"entityId": entity_id}, timeout=30)
+    # Large stations (e.g. KTSF) have deep trees of hundreds of folders, and
+    # the occasional folder call is slow to respond; be patient and retry a
+    # few extra times so one flaky call doesn't fail the whole station's walk.
+    @retry(stop=stop_after_attempt(6), wait=wait_exponential(multiplier=1, min=2, max=30))
+    def _get_folder(self, folder_id: str, entity_id: str, session: requests.Session | None = None) -> dict:
+        http = session or self._http
+        resp = http.get(FOLDER_ID_API.format(folder_id=folder_id), params={"entityId": entity_id}, timeout=45)
         resp.raise_for_status()
         data = resp.json()
         if data.get("status") != "success":
@@ -199,9 +217,10 @@ class FccClient:
         return data["folder"]
 
     @retry(stop=stop_after_attempt(4), wait=wait_exponential(multiplier=1, min=2, max=30))
-    def _resolve_political_root(self, entity_id: str, service: str) -> str | None:
+    def _resolve_political_root(self, entity_id: str, service: str, session: requests.Session | None = None) -> str | None:
+        http = session or self._http
         source = SERVICE_TO_SOURCE.get(service.upper())
-        resp = self._http.get(
+        resp = http.get(
             FOLDER_PATH_API,
             params={"folderPath": "Political Files", "entityId": entity_id, "sourceService": source},
             timeout=30,
@@ -213,7 +232,12 @@ class FccClient:
         return data["folder"][0]["entity_folder_id"]
 
     def walk_political_files(
-        self, callsign: str, service: str, since: date | None = None
+        self,
+        callsign: str,
+        service: str,
+        since: date | None = None,
+        entity_id: str | None = None,
+        session: requests.Session | None = None,
     ) -> list[FccFiling]:
         """Recursively walk a station's Political Files folder tree via the
         JSON folder API and return every filing found, complete - unlike
@@ -225,13 +249,19 @@ class FccClient:
         year are pruned at the root without recursing (speed), and (2) every
         individual file is checked against `since` by its create timestamp
         (correctness - catches anything mis-filed under a newer year folder).
+
+        `entity_id`: pass the cached FCC facility ID to skip the slow,
+        browser-based RSS lookup. `session`: pass a dedicated requests.Session
+        so this call is safe to run in its own thread (the folder API is plain
+        HTTP; only entity-ID resolution needs the non-thread-safe browser).
         """
-        entity_id = self.resolve_entity_id(callsign, service)
-        root_id = self._resolve_political_root(entity_id, service)
+        if entity_id is None:
+            entity_id = self.resolve_entity_id(callsign, service)  # main thread only (Playwright)
+        root_id = self._resolve_political_root(entity_id, service, session)
         if root_id is None:
             return []
         filings: list[FccFiling] = []
-        self._walk_folder(root_id, entity_id, callsign, service, filings, since, "Political Files", is_root=True)
+        self._walk_folder(root_id, entity_id, callsign, service, filings, since, "Political Files", session, is_root=True)
         return filings
 
     def _walk_folder(
@@ -243,9 +273,10 @@ class FccClient:
         out: list[FccFiling],
         since: date | None,
         current_path: str,
+        session: requests.Session | None = None,
         is_root: bool = False,
     ) -> None:
-        folder = self._get_folder(folder_id, entity_id)
+        folder = self._get_folder(folder_id, entity_id, session)
         if folder.get("file_count") == "0":
             return
 
@@ -293,7 +324,7 @@ class FccClient:
                 if name.isdigit() and len(name) == 4 and int(name) < since.year:
                     continue
             self._walk_folder(
-                sub["entity_folder_id"], entity_id, callsign, service, out, since, f"{current_path}/{name}"
+                sub["entity_folder_id"], entity_id, callsign, service, out, since, f"{current_path}/{name}", session
             )
 
     def fetch_station_feed(self, callsign: str, service: str) -> list[FccFiling]:

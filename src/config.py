@@ -13,6 +13,7 @@ class Station:
     callsign: str
     service: str
     market: str
+    entity_id: str | None = None  # FCC facility ID; resolved at runtime if absent
 
 
 def load_stations(path: str | None = None) -> list[Station]:
@@ -21,7 +22,12 @@ def load_stations(path: str | None = None) -> list[Station]:
         raw = yaml.safe_load(f)
     market = raw["market"]
     return [
-        Station(callsign=s["callsign"], service=s["service"], market=market)
+        Station(
+            callsign=s["callsign"],
+            service=s["service"],
+            market=market,
+            entity_id=str(s["entity_id"]) if s.get("entity_id") is not None else None,
+        )
         for s in raw["stations"]
     ]
 

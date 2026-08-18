@@ -6,40 +6,60 @@
 #
 # market: a human label used for tagging (Drive properties + DB), not sent to
 # the FCC API.
+#
+# entity_id: the station's FCC facility/entity ID. Optional but recommended -
+# when present, ingest skips the (slow, browser-based) lookup that derives it
+# from the RSS feed and goes straight to the folder API. To add a new station
+# without it, leave entity_id off and it'll be resolved automatically on the
+# next run (just slower). IDs verified 2026-08-12.
 
 market: "San Francisco-Oakland-San Jose"
 
 stations:
   - callsign: KGO-TV
     service: TV
+    entity_id: "34470"
   - callsign: KPIX-TV
     service: TV
+    entity_id: "25452"
   - callsign: KRON-TV
     service: TV
+    entity_id: "65526"
   - callsign: KTVU
     service: TV
+    entity_id: "35703"
   - callsign: KNTV
     service: TV
+    entity_id: "35280"
   - callsign: KQED
     service: TV
+    entity_id: "35500"
   - callsign: KICU-TV
     service: TV
+    entity_id: "34564"
   - callsign: KOFY-TV
     service: TV
+    entity_id: "51189"
   - callsign: KCNS
     service: TV
+    entity_id: "71586"
   - callsign: KKPX-TV
     service: TV
+    entity_id: "22644"
   - callsign: KEMO-TV
     service: TV
+    entity_id: "34440"
   - callsign: KTSF
     service: TV
+    entity_id: "37511"
   # Radio - add commercial stations with 5+ FTEs in the market per FCC rules;
   # this list is intentionally incomplete as a starting point.
   - callsign: KCBS
     service: AM
+    entity_id: "9637"
   - callsign: KNBR
     service: AM
+    entity_id: "35208"
   # Two stations removed 2026-08-07 after verifying against
   # https://publicfiles.fcc.gov/find - neither callsign has any match there
   # (TV+FM+AM search), meaning the callsign doesn't exist in FCC's current
