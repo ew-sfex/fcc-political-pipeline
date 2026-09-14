@@ -118,6 +118,9 @@ if df.empty:
 
 df["race_type"] = df["category_path"].map(_race_type)
 df["provider_type"] = df["service"].map(lambda s: "Cable" if str(s).upper() == "CABLE" else "Broadcast")
+# Strip the cable ad-platform prefix ("AMP - ", "POL - ", ...) for any rows
+# stored before ingest did this itself; new rows are already clean.
+df["purchaser"] = df["purchaser"].fillna("").str.replace(r"^[A-Z]{2,5} - ", "", regex=True)
 df["fcc_page"] = df.apply(lambda r: _fcc_folder_page(r["callsign"], r["service"], r["entity_id"], r["download_url"]), axis=1)
 df["direct"] = df.apply(lambda r: _direct_url(r["download_url"], r["file_name"]), axis=1)
 

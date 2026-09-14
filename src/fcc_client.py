@@ -73,6 +73,11 @@ SERVICE_TO_PROFILE_SLUG = {
 
 TITLE_CATEGORY_RE = re.compile(r"uploaded a file in (.+)$")
 
+# Leading ad-platform/order-type code cable prepends to advertiser folders,
+# e.g. "AMP - ", "POL - ", "PCA - ". Shared with the dashboard's display-time
+# cleanup for rows ingested before this strip existed.
+PLATFORM_PREFIX_RE = re.compile(r"^[A-Z]{2,5} - ")
+
 # FCC's own feed generation doesn't escape bare `&` in filenames/titles (e.g.
 # "Issues & Programs 2026 Q2.pdf"), which makes the XML invalid - confirmed
 # 2026-08-07 against KQED's feed. Escape any `&` not already part of a valid
@@ -109,11 +114,12 @@ class FccFiling:
         if not parts:
             return None
         name = parts[-1]
-        # Cable systems (via the Ampersand ad platform) prefix the advertiser
-        # folder with "AMP - " (e.g. "AMP - ERIC JONES FOR CONGRESS CA CD4");
-        # strip it so cable and broadcast purchasers read consistently.
-        if name.startswith("AMP - "):
-            name = name[len("AMP - "):].strip()
+        # Cable advertiser folders carry a short ad-platform/order-type prefix
+        # like "AMP - ", "POL - ", "PCA - " (e.g. "AMP - ERIC JONES FOR
+        # CONGRESS CA CD4"). Strip a leading 2-5 uppercase-letter code so cable
+        # and broadcast purchasers read consistently. Broadcast names don't
+        # match this shape, so they're unaffected.
+        name = PLATFORM_PREFIX_RE.sub("", name).strip()
         return name or None
 
     @property
