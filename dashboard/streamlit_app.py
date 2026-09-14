@@ -46,12 +46,17 @@ def _engine():
 @st.cache_data(ttl=600)
 def load_filings() -> pd.DataFrame:
     """Load all filings, newest first. Cached for 10 min so the page is snappy
-    and we're not re-querying on every widget interaction."""
-    df = pd.read_sql(
-        "SELECT callsign, purchaser, category_path, file_name, filed_date, "
-        "download_url, service, market FROM filings ORDER BY filed_date DESC",
-        _engine(),
-    )
+    and we're not re-querying on every widget interaction.
+
+    `entity_id` was added after the table first shipped; the ingest migrates
+    the DB, but the dashboard reads directly (no migration), so tolerate the
+    column not existing yet during a deploy window and synthesize it as null."""
+    cols = "callsign, purchaser, category_path, file_name, filed_date, download_url, service, market"
+    try:
+        df = pd.read_sql(f"SELECT {cols}, entity_id FROM filings ORDER BY filed_date DESC", _engine())
+    except Exception:
+        df = pd.read_sql(f"SELECT {cols} FROM filings ORDER BY filed_date DESC", _engine())
+        df["entity_id"] = None
     df["filed_date"] = pd.to_datetime(df["filed_date"], errors="coerce")
     return df
 
@@ -63,19 +68,22 @@ def _race_type(category_path: str) -> str:
     return parts[2] if len(parts) > 2 else "(uncategorized)"
 
 
-_SERVICE_SLUG = {"TV": "tv-profile", "AM": "am-profile", "FM": "fm-profile"}
+_SERVICE_SLUG = {"TV": "tv-profile", "AM": "am-profile", "FM": "fm-profile", "CABLE": "cable-profile"}
 _DOWNLOAD_FOLDER_RE = re.compile(r"/manager/download/([^/]+)/")
 
 
-def _fcc_folder_page(callsign: str, service: str, download_url: str) -> str:
+def _fcc_folder_page(callsign: str, service: str, entity_id, download_url: str) -> str:
     """Deep link to the FCC folder that contains this filing. FCC's browse UI
     resolves a folder by the GUID embedded in the download URL alone (path
     segments are cosmetic), so we land the reader on the exact folder, not the
     station root. Falls back to the station root if the GUID can't be parsed.
     Either way it loads reliably (FCC serves normal page navigations to real
     browsers) and establishes the session that makes the direct links work."""
-    slug = _SERVICE_SLUG.get((service or "").upper(), "tv-profile")
-    base = f"https://publicfiles.fcc.gov/{slug}/{str(callsign).lower()}/political-files"
+    svc = (service or "").upper()
+    slug = _SERVICE_SLUG.get(svc, "tv-profile")
+    # cable-profile URLs are keyed by PSID (entity_id); broadcast by callsign.
+    ident = str(entity_id) if svc == "CABLE" and entity_id else str(callsign).lower()
+    base = f"https://publicfiles.fcc.gov/{slug}/{ident}/political-files"
     m = _DOWNLOAD_FOLDER_RE.search(download_url or "")
     return f"{base}/{m.group(1)}" if m else base
 
@@ -97,10 +105,10 @@ st.set_page_config(page_title="Bay Area Political Ad Filings", page_icon="🗳�
 
 st.title("🗳️ Bay Area Political Ad Filings")
 st.caption(
-    "Political-file documents filed by Bay Area broadcast stations with the FCC, "
-    "since Jan 1 2025. Refreshed automatically 3×/day. Click a row's link to open "
-    "the source PDF on the FCC site. Dollar amounts live inside those PDFs and are "
-    "not extracted here (yet)."
+    "Political-file documents filed by Bay Area broadcast stations **and cable "
+    "systems** with the FCC, since Jan 1 2025. Refreshed automatically 3×/day. "
+    "Click a row's link to open the source PDF on the FCC site. Dollar amounts "
+    "live inside those PDFs and are not extracted here (yet)."
 )
 
 df = load_filings()
@@ -109,14 +117,18 @@ if df.empty:
     st.stop()
 
 df["race_type"] = df["category_path"].map(_race_type)
-df["fcc_page"] = df.apply(lambda r: _fcc_folder_page(r["callsign"], r["service"], r["download_url"]), axis=1)
+df["provider_type"] = df["service"].map(lambda s: "Cable" if str(s).upper() == "CABLE" else "Broadcast")
+df["fcc_page"] = df.apply(lambda r: _fcc_folder_page(r["callsign"], r["service"], r["entity_id"], r["download_url"]), axis=1)
 df["direct"] = df.apply(lambda r: _direct_url(r["download_url"], r["file_name"]), axis=1)
 
 # --- Filters ---
-c1, c2, c3 = st.columns([2, 2, 3])
+c0, c1, c2, c3 = st.columns([1.4, 2, 2, 2.6])
+with c0:
+    ptypes = sorted(df["provider_type"].dropna().unique())
+    picked_ptypes = st.multiselect("Type", ptypes, default=[])
 with c1:
     stations = sorted(df["callsign"].dropna().unique())
-    picked_stations = st.multiselect("Station", stations, default=[])
+    picked_stations = st.multiselect("Station / system", stations, default=[])
 with c2:
     types = sorted(df["race_type"].dropna().unique())
     picked_types = st.multiselect("Race / category", types, default=[])
@@ -124,6 +136,8 @@ with c3:
     query = st.text_input("Search advertiser or document name", "")
 
 view = df
+if picked_ptypes:
+    view = view[view["provider_type"].isin(picked_ptypes)]
 if picked_stations:
     view = view[view["callsign"].isin(picked_stations)]
 if picked_types:
@@ -144,12 +158,13 @@ if not view["filed_date"].isna().all():
     m3.metric("Most recent filing", view["filed_date"].max().strftime("%b %d, %Y"))
 
 st.dataframe(
-    view[["filed_date", "callsign", "purchaser", "race_type", "file_name", "direct", "fcc_page"]],
+    view[["filed_date", "provider_type", "callsign", "purchaser", "race_type", "file_name", "direct", "fcc_page"]],
     hide_index=True,
     use_container_width=True,
     column_config={
         "filed_date": st.column_config.DatetimeColumn("Filed", format="YYYY-MM-DD"),
-        "callsign": "Station",
+        "provider_type": "Type",
+        "callsign": "Station / system",
         "purchaser": "Advertiser / committee",
         "race_type": "Race / category",
         "file_name": "Document",

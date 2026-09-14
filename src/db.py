@@ -1,13 +1,16 @@
 """SQLAlchemy models + engine. Works with sqlite:// (local/dev) or a
 postgres:// URL (recommended for production - e.g. Supabase) via DATABASE_URL.
 """
+import logging
 from datetime import datetime, timezone
 
 from sqlalchemy import (
     create_engine, Column, Integer, String, Text, DateTime, Float, Boolean,
-    UniqueConstraint,
+    UniqueConstraint, text,
 )
 from sqlalchemy.orm import declarative_base, sessionmaker
+
+log = logging.getLogger("db")
 
 from . import config
 
@@ -33,8 +36,9 @@ class Filing(Base):
     fcc_file_id = Column(String, nullable=False)       # GUID from RSS <id>
 
     # --- Station / market tagging ---
-    callsign = Column(String, nullable=False, index=True)
-    service = Column(String)                            # TV / AM / FM
+    callsign = Column(String, nullable=False, index=True)  # display label (e.g. "KGO-TV", "Comcast (Bay Area)")
+    service = Column(String)                            # TV / AM / FM / CABLE
+    entity_id = Column(String, index=True)             # FCC facility id (broadcast) or PSID (cable) - used to deep-link to the owning profile
     market = Column(String, index=True)
     category_path = Column(Text)                         # e.g. "Political Files/2026/Non-Candidate Issue Ads/BOLD America"
     campaign_year = Column(String)
@@ -92,3 +96,27 @@ def get_session():
 
 def init_db():
     Base.metadata.create_all(get_engine())
+    _ensure_columns()
+
+
+# Columns added after the table was first created in production. create_all()
+# only creates missing *tables*, never alters existing ones, so new columns
+# need an explicit (idempotent) ALTER. Keeps the live Supabase table in sync
+# without a manual migration step.
+_ADDED_COLUMNS = {
+    "entity_id": "VARCHAR",
+}
+
+
+def _ensure_columns():
+    engine = get_engine()
+    for name, coltype in _ADDED_COLUMNS.items():
+        try:
+            with engine.begin() as conn:
+                conn.execute(text(f"ALTER TABLE filings ADD COLUMN {name} {coltype}"))
+            log.info("Added missing column filings.%s", name)
+        except Exception:
+            # Already exists (the normal case) - SQLite raises "duplicate
+            # column", Postgres "already exists". Anything else surfaces on the
+            # next real query; a missing column isn't worth failing startup for.
+            pass

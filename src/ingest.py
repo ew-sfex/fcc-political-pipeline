@@ -131,6 +131,7 @@ def _write_new_filings(session, stations, results, new_filings: list) -> None:
                 fcc_file_id=filing.file_id,
                 callsign=station.callsign,
                 service=station.service,
+                entity_id=station.entity_id,
                 market=station.market,
                 category_path=filing.category_path,
                 campaign_year=filing.campaign_year,

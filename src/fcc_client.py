@@ -51,8 +51,12 @@ FOLDER_PATH_API = "https://publicfiles.fcc.gov/api/manager/folder/path.json"
 FOLDER_ID_API = "https://publicfiles.fcc.gov/api/manager/folder/id/{folder_id}.json"
 
 # sourceService param for the folder-path lookup - matches SERVICE_TO_PROFILE_SLUG
-# minus the "-profile" suffix; confirmed "tv" works, am/fm assumed analogous.
-SERVICE_TO_SOURCE = {"TV": "tv", "FM": "fm", "AM": "am"}
+# minus the "-profile" suffix; confirmed "tv" and "cable" work, am/fm analogous.
+# CABLE entities use their PSID as the entity_id (it's the profile URL id, and
+# also embedded in the RSS title as "cable Entity <PSID>"), so a cable station
+# must always carry a cached entity_id in config - there is no callsign->id
+# lookup for cable the way there is for broadcast.
+SERVICE_TO_SOURCE = {"TV": "tv", "FM": "fm", "AM": "am", "CABLE": "cable"}
 
 ATOM_NS = {"atom": "http://www.w3.org/2005/Atom"}
 XHTML_NS = {"xhtml": "http://www.w3.org/1999/xhtml"}
@@ -64,6 +68,7 @@ SERVICE_TO_PROFILE_SLUG = {
     "TV": "tv-profile",
     "FM": "fm-profile",
     "AM": "am-profile",
+    "CABLE": "cable-profile",
 }
 
 TITLE_CATEGORY_RE = re.compile(r"uploaded a file in (.+)$")
@@ -101,7 +106,15 @@ class FccFiling:
         if not self.category_path:
             return None
         parts = [p.strip() for p in self.category_path.split("/") if p.strip()]
-        return parts[-1] if parts else None
+        if not parts:
+            return None
+        name = parts[-1]
+        # Cable systems (via the Ampersand ad platform) prefix the advertiser
+        # folder with "AMP - " (e.g. "AMP - ERIC JONES FOR CONGRESS CA CD4");
+        # strip it so cable and broadcast purchasers read consistently.
+        if name.startswith("AMP - "):
+            name = name[len("AMP - "):].strip()
+        return name or None
 
     @property
     def campaign_year(self) -> str | None:

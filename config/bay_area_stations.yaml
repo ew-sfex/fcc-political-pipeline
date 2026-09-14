@@ -60,6 +60,25 @@ stations:
   - callsign: KNBR
     service: AM
     entity_id: "35208"
+  # Cable systems (service: CABLE). entity_id is the system's PSID (from its
+  # publicfiles.fcc.gov/cable-profile/<PSID> URL), used directly - cable has no
+  # callsign->id lookup, so entity_id is REQUIRED for cable rows. callsign here
+  # is just a display label.
+  #
+  # NOTE on Comcast: its Bay Area franchise entities (e.g. Comcast of CA IX =
+  # SF/Peninsula 001963, Comcast of CA II = South Bay 000214) each carry the
+  # SAME regional political-file set (verified 2026-09-14: 100% overlap of
+  # ~1,156 filings, different file GUIDs). So ONE Comcast PSID gives complete
+  # Bay Area Comcast coverage - listing more would duplicate every buy (dedup
+  # is by file GUID, which differs per PSID, so it would NOT catch it).
+  #
+  # NOT YET ADDED, pending a scoping decision (see README / Slack):
+  #   - AT&T U-verse (PSID 999999): national, organized by STATE with no
+  #     Bay-Area sub-scope ("California" = whole state, mixes SF and LA/OC).
+  #   - Astound/Wave: enumeration via the zip->cable search still TODO.
+  - callsign: "Comcast (Bay Area)"
+    service: CABLE
+    entity_id: "001963"
   # Two stations removed 2026-08-07 after verifying against
   # https://publicfiles.fcc.gov/find - neither callsign has any match there
   # (TV+FM+AM search), meaning the callsign doesn't exist in FCC's current

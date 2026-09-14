@@ -31,17 +31,20 @@ _DOWNLOAD_FOLDER_RE = re.compile(r"/manager/download/([^/]+)/")
 # day. The DB still has every row regardless.
 MAX_ITEMIZED = 25
 
-_SERVICE_SLUG = {"TV": "tv-profile", "AM": "am-profile", "FM": "fm-profile"}
+_SERVICE_SLUG = {"TV": "tv-profile", "AM": "am-profile", "FM": "fm-profile", "CABLE": "cable-profile"}
 
 
-def _fcc_folder_link(callsign: str, service: str, download_url: str) -> str:
+def _fcc_folder_link(callsign: str, service: str, entity_id, download_url: str) -> str:
     """Deep link to the FCC folder that contains this filing (so the reader
     lands on the exact committee/category folder, not the station root).
     Falls back to the station's political-files root if the folder GUID can't
     be parsed. Either way it loads reliably (unlike the raw download endpoint)
     and establishes the FCC session that makes the direct-file link work."""
-    slug = _SERVICE_SLUG.get((service or "").upper(), "tv-profile")
-    base = f"https://publicfiles.fcc.gov/{slug}/{str(callsign).lower()}/political-files"
+    svc = (service or "").upper()
+    slug = _SERVICE_SLUG.get(svc, "tv-profile")
+    # cable-profile URLs are keyed by PSID (entity_id); broadcast by callsign.
+    ident = str(entity_id) if svc == "CABLE" and entity_id else str(callsign).lower()
+    base = f"https://publicfiles.fcc.gov/{slug}/{ident}/political-files"
     m = _DOWNLOAD_FOLDER_RE.search(download_url or "")
     return f"{base}/{m.group(1)}" if m else base
 
@@ -97,7 +100,7 @@ def _format_message(filings: list) -> str:
         # "FCC folder" is the reliable fallback that also unlocks the direct
         # link (see _fcc_folder_page).
         doc = f"<{_direct_url(f.download_url, f.file_name)}|{f.file_name}>"
-        folder = f"<{_fcc_folder_link(f.callsign, f.service, f.download_url)}|FCC folder ↗>"
+        folder = f"<{_fcc_folder_link(f.callsign, f.service, getattr(f, 'entity_id', None), f.download_url)}|FCC folder ↗>"
         lines.append(f"• *{f.callsign}* — {purchaser}{tag}: {doc}  ·  {folder}")
     if n > MAX_ITEMIZED:
         lines.append(f"…and {n - MAX_ITEMIZED} more.")
