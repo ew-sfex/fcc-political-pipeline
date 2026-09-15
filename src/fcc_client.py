@@ -56,7 +56,25 @@ FOLDER_ID_API = "https://publicfiles.fcc.gov/api/manager/folder/id/{folder_id}.j
 # also embedded in the RSS title as "cable Entity <PSID>"), so a cable station
 # must always carry a cached entity_id in config - there is no callsign->id
 # lookup for cable the way there is for broadcast.
-SERVICE_TO_SOURCE = {"TV": "tv", "FM": "fm", "AM": "am", "CABLE": "cable"}
+SERVICE_TO_SOURCE = {"TV": "tv", "FM": "fm", "AM": "am", "CABLE": "cable", "DBS": "dbs"}
+
+# US state names, used to scope national providers (AT&T U-verse, DirecTV,
+# Dish) that organize political files by state - we walk only the target
+# state's subtree and skip the other 49 (otherwise we'd ingest tens of
+# thousands of out-of-market filings). A folder whose name is a US state
+# other than the scope state is pruned during the walk.
+US_STATES = {
+    "Alabama", "Alaska", "Arizona", "Arkansas", "California", "Colorado",
+    "Connecticut", "Delaware", "Florida", "Georgia", "Hawaii", "Idaho",
+    "Illinois", "Indiana", "Iowa", "Kansas", "Kentucky", "Louisiana", "Maine",
+    "Maryland", "Massachusetts", "Michigan", "Minnesota", "Mississippi",
+    "Missouri", "Montana", "Nebraska", "Nevada", "New Hampshire", "New Jersey",
+    "New Mexico", "New York", "North Carolina", "North Dakota", "Ohio",
+    "Oklahoma", "Oregon", "Pennsylvania", "Rhode Island", "South Carolina",
+    "South Dakota", "Tennessee", "Texas", "Utah", "Vermont", "Virginia",
+    "Washington", "West Virginia", "Wisconsin", "Wyoming",
+    "District of Columbia",
+}
 
 ATOM_NS = {"atom": "http://www.w3.org/2005/Atom"}
 XHTML_NS = {"xhtml": "http://www.w3.org/1999/xhtml"}
@@ -69,6 +87,7 @@ SERVICE_TO_PROFILE_SLUG = {
     "FM": "fm-profile",
     "AM": "am-profile",
     "CABLE": "cable-profile",
+    "DBS": "dbs-profile",
 }
 
 TITLE_CATEGORY_RE = re.compile(r"uploaded a file in (.+)$")
@@ -257,6 +276,8 @@ class FccClient:
         since: date | None = None,
         entity_id: str | None = None,
         session: requests.Session | None = None,
+        scope_state: str | None = None,
+        categories: list | None = None,
     ) -> list[FccFiling]:
         """Recursively walk a station's Political Files folder tree via the
         JSON folder API and return every filing found, complete - unlike
@@ -273,6 +294,18 @@ class FccClient:
         browser-based RSS lookup. `session`: pass a dedicated requests.Session
         so this call is safe to run in its own thread (the folder API is plain
         HTTP; only entity-ID resolution needs the non-thread-safe browser).
+
+        `scope_state`: for national providers that file by state (AT&T
+        U-verse, DirecTV, Dish), pass e.g. "California" to walk only that
+        state's subtree - folders named as other US states are pruned. Leave
+        None for market-specific providers (broadcast, Comcast cable).
+
+        `categories`: restrict the walk to these top-level category folders
+        (children of a year, e.g. ["State", "Non-Candidate Issue Ads"]). Use
+        it to skip a provider's branches that aren't state-foldered and would
+        otherwise be walked in full only to be dropped by the scope guard -
+        e.g. AT&T files candidate races as a flat national list under Federal,
+        so walking it wastes thousands of calls for zero California rows.
         """
         if entity_id is None:
             entity_id = self.resolve_entity_id(callsign, service)  # main thread only (Playwright)
@@ -280,7 +313,7 @@ class FccClient:
         if root_id is None:
             return []
         filings: list[FccFiling] = []
-        self._walk_folder(root_id, entity_id, callsign, service, filings, since, "Political Files", session, is_root=True)
+        self._walk_folder(root_id, entity_id, callsign, service, filings, since, "Political Files", session, scope_state, categories, is_root=True)
         return filings
 
     def _walk_folder(
@@ -293,6 +326,8 @@ class FccClient:
         since: date | None,
         current_path: str,
         session: requests.Session | None = None,
+        scope_state: str | None = None,
+        categories: list | None = None,
         is_root: bool = False,
     ) -> None:
         folder = self._get_folder(folder_id, entity_id, session)
@@ -328,6 +363,15 @@ class FccClient:
                 dt = filing.updated_dt
                 if dt is not None and dt.date() < since:
                     continue
+            # Scope correctness guard: only keep a filing that actually passed
+            # THROUGH the scope-state folder. Providers organize inconsistently
+            # - DirecTV folders every branch by state, but AT&T folders only
+            # its issue ads by state and dumps candidate races into a flat
+            # national list (state buried in the committee name). Requiring the
+            # state folder in the path drops that un-attributable soup rather
+            # than mislabeling Tennessee races as California.
+            if scope_state and scope_state not in current_path.split("/"):
+                continue
             out.append(filing)
 
         for sub in folder.get("subfolders") or []:
@@ -342,8 +386,21 @@ class FccClient:
             if is_root and since is not None:
                 if name.isdigit() and len(name) == 4 and int(name) < since.year:
                     continue
+            # Scope national by-state providers to one state: prune any folder
+            # named as a different US state (keeps the scope state and every
+            # non-state-named folder - categories, offices, committees).
+            if scope_state and name in US_STATES and name != scope_state:
+                continue
+            # Category allow-list: children of a year folder are the top-level
+            # categories (Federal/State/Local/Non-Candidate Issue Ads); when a
+            # provider restricts them, skip the rest.
+            if categories:
+                segs = current_path.split("/")
+                at_year_level = len(segs) == 2 and segs[1].isdigit() and len(segs[1]) == 4
+                if at_year_level and name not in categories:
+                    continue
             self._walk_folder(
-                sub["entity_folder_id"], entity_id, callsign, service, out, since, f"{current_path}/{name}", session
+                sub["entity_folder_id"], entity_id, callsign, service, out, since, f"{current_path}/{name}", session, scope_state, categories
             )
 
     def fetch_station_feed(self, callsign: str, service: str) -> list[FccFiling]:

@@ -98,6 +98,7 @@ def _walk_all_stations(fcc, stations) -> dict[str, list]:
             return station.callsign, fcc.walk_political_files(
                 station.callsign, station.service,
                 since=config.BACKFILL_SINCE, entity_id=station.entity_id, session=sess,
+                scope_state=station.scope, categories=station.categories,
             )
         finally:
             sess.close()

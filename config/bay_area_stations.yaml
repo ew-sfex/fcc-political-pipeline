@@ -72,13 +72,43 @@ stations:
   # Bay Area Comcast coverage - listing more would duplicate every buy (dedup
   # is by file GUID, which differs per PSID, so it would NOT catch it).
   #
-  # NOT YET ADDED, pending a scoping decision (see README / Slack):
-  #   - AT&T U-verse (PSID 999999): national, organized by STATE with no
-  #     Bay-Area sub-scope ("California" = whole state, mixes SF and LA/OC).
-  #   - Astound/Wave: enumeration via the zip->cable search still TODO.
   - callsign: "Comcast (Bay Area)"
     service: CABLE
     entity_id: "001963"
+
+  # --- Statewide (CA) tier ---------------------------------------------------
+  # National providers that file political ads only BY STATE (no Bay Area
+  # sub-scope): AT&T U-verse (cable) and the satellite/DBS carriers. We scope
+  # each to California (the walk prunes the other 49 states) and tag market
+  # "California (statewide)" so the dashboard can separate this from the
+  # Bay-Area-precise broadcast + Comcast rows. "California" mixes SF with
+  # LA/SD/Sacramento races - there's no finer geo tag in these filings.
+  - callsign: "AT&T U-verse (CA)"
+    service: CABLE
+    entity_id: "999999"
+    scope: California
+    market: "California (statewide)"
+    # AT&T folders only its State + Issue Ads by state; its Federal/Local
+    # candidate races are a flat NATIONAL list (state only in the committee
+    # name), which the scope guard drops anyway. Restricting the walk to the
+    # state-foldered categories avoids traversing that whole national tree
+    # 3x/day (dropped ~7 min -> seconds; verified 2026-09-14).
+    categories: ["State", "Non-Candidate Issue Ads"]
+  - callsign: "DirecTV (CA)"
+    service: DBS
+    entity_id: "DIRECTV"
+    scope: California
+    market: "California (statewide)"
+  # Dish (service: DBS, entity_id: DISH) intentionally omitted: ~1,729 filings
+  # in 2025 and ZERO in 2026 (satellite political sales appear to have dried
+  # up). Re-add if it picks back up:
+  #   - callsign: "Dish (CA)"
+  #     service: DBS
+  #     entity_id: "DISH"
+  #     scope: California
+  #     market: "California (statewide)"
+  #
+  # Astound/Wave (Bay Area cable): enumeration via the zip->cable search TODO.
   # Two stations removed 2026-08-07 after verifying against
   # https://publicfiles.fcc.gov/find - neither callsign has any match there
   # (TV+FM+AM search), meaning the callsign doesn't exist in FCC's current

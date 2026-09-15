@@ -13,20 +13,26 @@ class Station:
     callsign: str
     service: str
     market: str
-    entity_id: str | None = None  # FCC facility ID; resolved at runtime if absent
+    entity_id: str | None = None  # FCC facility ID / cable PSID / DBS name; resolved at runtime if absent
+    scope: str | None = None      # for national by-state providers: the state to keep (e.g. "California")
+    categories: list | None = None  # restrict the walk to these top-level category folders (efficiency)
 
 
 def load_stations(path: str | None = None) -> list[Station]:
     path = path or os.environ.get("STATION_CONFIG_PATH", "config/bay_area_stations.yaml")
     with open(path) as f:
         raw = yaml.safe_load(f)
-    market = raw["market"]
+    default_market = raw["market"]
     return [
         Station(
             callsign=s["callsign"],
             service=s["service"],
-            market=market,
+            # per-station market override (e.g. statewide providers tag
+            # "California (statewide)"); falls back to the file's default.
+            market=s.get("market") or default_market,
             entity_id=str(s["entity_id"]) if s.get("entity_id") is not None else None,
+            scope=s.get("scope"),
+            categories=s.get("categories"),
         )
         for s in raw["stations"]
     ]

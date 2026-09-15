@@ -68,7 +68,7 @@ def _race_type(category_path: str) -> str:
     return parts[2] if len(parts) > 2 else "(uncategorized)"
 
 
-_SERVICE_SLUG = {"TV": "tv-profile", "AM": "am-profile", "FM": "fm-profile", "CABLE": "cable-profile"}
+_SERVICE_SLUG = {"TV": "tv-profile", "AM": "am-profile", "FM": "fm-profile", "CABLE": "cable-profile", "DBS": "dbs-profile"}
 _DOWNLOAD_FOLDER_RE = re.compile(r"/manager/download/([^/]+)/")
 
 
@@ -81,8 +81,9 @@ def _fcc_folder_page(callsign: str, service: str, entity_id, download_url: str) 
     browsers) and establishes the session that makes the direct links work."""
     svc = (service or "").upper()
     slug = _SERVICE_SLUG.get(svc, "tv-profile")
-    # cable-profile URLs are keyed by PSID (entity_id); broadcast by callsign.
-    ident = str(entity_id) if svc == "CABLE" and entity_id else str(callsign).lower()
+    # cable-/dbs-profile URLs are keyed by the entity id (PSID / provider name);
+    # broadcast profiles by callsign.
+    ident = str(entity_id) if svc in ("CABLE", "DBS") and entity_id else str(callsign).lower()
     base = f"https://publicfiles.fcc.gov/{slug}/{ident}/political-files"
     m = _DOWNLOAD_FOLDER_RE.search(download_url or "")
     return f"{base}/{m.group(1)}" if m else base
@@ -105,10 +106,12 @@ st.set_page_config(page_title="Bay Area Political Ad Filings", page_icon="🗳�
 
 st.title("🗳️ Bay Area Political Ad Filings")
 st.caption(
-    "Political-file documents filed by Bay Area broadcast stations **and cable "
-    "systems** with the FCC, since Jan 1 2025. Refreshed automatically 3×/day. "
-    "Click a row's link to open the source PDF on the FCC site. Dollar amounts "
-    "live inside those PDFs and are not extracted here (yet)."
+    "Political-file documents filed with the FCC since Jan 1 2025, refreshed "
+    "automatically 3×/day. **Coverage** is either *Bay Area* (broadcast + Comcast "
+    "cable, market-specific) or *Statewide (CA)* (AT&T U-verse & DirecTV, which "
+    "file only by state — California-wide, not Bay-Area-specific). Click a row's "
+    "link to open the source PDF on the FCC site; dollar amounts live inside "
+    "those PDFs and aren't extracted here (yet)."
 )
 
 df = load_filings()
@@ -116,8 +119,12 @@ if df.empty:
     st.warning("No filings found. If this is unexpected, the DATABASE_URL secret may be missing or wrong.")
     st.stop()
 
+_PROVIDER_TYPE = {"CABLE": "Cable", "DBS": "Satellite"}
 df["race_type"] = df["category_path"].map(_race_type)
-df["provider_type"] = df["service"].map(lambda s: "Cable" if str(s).upper() == "CABLE" else "Broadcast")
+df["provider_type"] = df["service"].map(lambda s: _PROVIDER_TYPE.get(str(s).upper(), "Broadcast"))
+# Coverage tier: broadcast + Comcast cable are Bay-Area-specific; national
+# providers (AT&T/DirecTV/Dish) file only by state and are tagged statewide.
+df["coverage"] = df["market"].map(lambda m: "Statewide (CA)" if "statewide" in str(m).lower() else "Bay Area")
 # Strip the cable ad-platform prefix ("AMP - ", "POL - ", ...) for any rows
 # stored before ingest did this itself; new rows are already clean.
 df["purchaser"] = df["purchaser"].fillna("").str.replace(r"^[A-Z]{2,5} - ", "", regex=True)
@@ -125,7 +132,12 @@ df["fcc_page"] = df.apply(lambda r: _fcc_folder_page(r["callsign"], r["service"]
 df["direct"] = df.apply(lambda r: _direct_url(r["download_url"], r["file_name"]), axis=1)
 
 # --- Filters ---
-c0, c1, c2, c3 = st.columns([1.4, 2, 2, 2.6])
+cc, c0, c1, c2, c3 = st.columns([1.5, 1.3, 2, 1.8, 2.4])
+with cc:
+    coverages = sorted(df["coverage"].dropna().unique())
+    picked_coverage = st.multiselect("Coverage", coverages, default=[],
+                                     help="Bay Area = broadcast + Comcast cable (market-specific). "
+                                          "Statewide (CA) = AT&T/DirecTV, filed only by state.")
 with c0:
     ptypes = sorted(df["provider_type"].dropna().unique())
     picked_ptypes = st.multiselect("Type", ptypes, default=[])
@@ -139,6 +151,8 @@ with c3:
     query = st.text_input("Search advertiser or document name", "")
 
 view = df
+if picked_coverage:
+    view = view[view["coverage"].isin(picked_coverage)]
 if picked_ptypes:
     view = view[view["provider_type"].isin(picked_ptypes)]
 if picked_stations:
@@ -161,11 +175,12 @@ if not view["filed_date"].isna().all():
     m3.metric("Most recent filing", view["filed_date"].max().strftime("%b %d, %Y"))
 
 st.dataframe(
-    view[["filed_date", "provider_type", "callsign", "purchaser", "race_type", "file_name", "direct", "fcc_page"]],
+    view[["filed_date", "coverage", "provider_type", "callsign", "purchaser", "race_type", "file_name", "direct", "fcc_page"]],
     hide_index=True,
     use_container_width=True,
     column_config={
         "filed_date": st.column_config.DatetimeColumn("Filed", format="YYYY-MM-DD"),
+        "coverage": "Coverage",
         "provider_type": "Type",
         "callsign": "Station / system",
         "purchaser": "Advertiser / committee",
