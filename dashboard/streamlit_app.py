@@ -35,6 +35,13 @@ def _database_url() -> str:
     # Supabase/Heroku hand out "postgres://"; SQLAlchemy needs "postgresql://".
     if url.startswith("postgres://"):
         url = "postgresql://" + url[len("postgres://"):]
+    # Pin the psycopg (v3) driver explicitly so the dialect always resolves to
+    # the one we install (psycopg[binary]), regardless of what SQLAlchemy would
+    # pick by default on a given rebuild. Normalize any ...+psycopg2 too.
+    if url.startswith("postgresql+psycopg2://"):
+        url = "postgresql+psycopg://" + url[len("postgresql+psycopg2://"):]
+    elif url.startswith("postgresql://"):
+        url = "postgresql+psycopg://" + url[len("postgresql://"):]
     return url
 
 

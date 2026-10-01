@@ -1,4 +1,7 @@
 streamlit>=1.38
 pandas>=2.2
 SQLAlchemy>=2.0
-psycopg2-binary>=2.9
+# psycopg v3 (not psycopg2): Streamlit Cloud rebuilt on Python 3.14, which has
+# no psycopg2-binary wheel, and newer SQLAlchemy defaults the postgresql://
+# dialect to psycopg v3 anyway. psycopg[binary] ships 3.14 wheels.
+psycopg[binary]>=3.2
