@@ -52,3 +52,21 @@ jobs:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
           SUPPRESS_ALERTS: ${{ inputs.suppress_alerts && '1' || '' }}
         run: python -m src.ingest
+
+      # Ping Slack if ANY prior step failed (install, DB connection, the walk,
+      # etc.). Runs at the workflow level - not inside Python - so it also
+      # catches failures that happen before our code runs (e.g. a dependency
+      # import break). This closes the silent-failure gap: the pipeline was
+      # down ~4 days in Sep 2026 before a crashed dashboard surfaced it.
+      - name: Alert Slack on failure
+        if: failure()
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          if [ -z "$SLACK_WEBHOOK_URL" ]; then
+            echo "SLACK_WEBHOOK_URL unset - skipping failure alert"; exit 0
+          fi
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          curl -sS -X POST -H 'Content-type: application/json' \
+            --data "{\"text\":\":rotating_light: *FCC ingest run failed* — the pipeline did not complete, so the dashboard may go stale until it's fixed. <${run_url}|View the run logs>.\"}" \
+            "$SLACK_WEBHOOK_URL" || true
