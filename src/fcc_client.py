@@ -97,6 +97,22 @@ TITLE_CATEGORY_RE = re.compile(r"uploaded a file in (.+)$")
 # cleanup for rows ingested before this strip existed.
 PLATFORM_PREFIX_RE = re.compile(r"^[A-Z]{2,5} - ")
 
+# Document-type folder names some stations nest UNDER the committee (e.g.
+# ".../ERIC JONES FOR CONGRESS/Contracts"). When the leaf is one of these it's
+# a document type, not an advertiser, so purchaser() steps up to the real
+# committee above it. Matched case-insensitively on the whole segment, so a
+# committee that merely contains one of these words is unaffected. Derived from
+# the real data (these recur under 19-50 different committees); keep in sync
+# with the dashboard's copy. Not exhaustive - the fundamentally committee-less
+# cases (advertiser only inside the PDF) still need Phase 2 extraction.
+DOC_TYPE_LEAVES = {
+    "contracts", "contract", "invoices", "invoice", "orders", "order",
+    "traffic", "traffic instructions - creative piq",
+    "nab and disclosures", "nab", "nab form", "nab forms",
+    "election forms nab loa fec etc", "terms and disclosures",
+    "agreements", "agreement", "disclosures",
+}
+
 # FCC's own feed generation doesn't escape bare `&` in filenames/titles (e.g.
 # "Issues & Programs 2026 Q2.pdf"), which makes the XML invalid - confirmed
 # 2026-08-07 against KQED's feed. Escape any `&` not already part of a valid
@@ -130,16 +146,17 @@ class FccFiling:
         if not self.category_path:
             return None
         parts = [p.strip() for p in self.category_path.split("/") if p.strip()]
-        if not parts:
-            return None
-        name = parts[-1]
-        # Cable advertiser folders carry a short ad-platform/order-type prefix
-        # like "AMP - ", "POL - ", "PCA - " (e.g. "AMP - ERIC JONES FOR
-        # CONGRESS CA CD4"). Strip a leading 2-5 uppercase-letter code so cable
-        # and broadcast purchasers read consistently. Broadcast names don't
-        # match this shape, so they're unaffected.
-        name = PLATFORM_PREFIX_RE.sub("", name).strip()
-        return name or None
+        # Walk from the leaf toward the root and return the first segment that
+        # is a real advertiser - skipping document-type folders (Contracts,
+        # Invoices, Traffic, NAB...) that some stations nest under the committee.
+        # On each candidate, strip the cable ad-platform prefix ("AMP - ",
+        # "POL - ", "PCA - ") so cable and broadcast read consistently.
+        for seg in reversed(parts):
+            name = PLATFORM_PREFIX_RE.sub("", seg).strip()
+            if name.lower() in DOC_TYPE_LEAVES:
+                continue
+            return name or None
+        return None
 
     @property
     def campaign_year(self) -> str | None:

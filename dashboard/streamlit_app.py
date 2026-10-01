@@ -79,6 +79,31 @@ def _race_type(category_path: str) -> str:
 _SERVICE_SLUG = {"TV": "tv-profile", "AM": "am-profile", "FM": "fm-profile", "CABLE": "cable-profile", "DBS": "dbs-profile"}
 _DOWNLOAD_FOLDER_RE = re.compile(r"/manager/download/([^/]+)/")
 
+# Advertiser/committee derivation - kept in sync with src/fcc_client.py so rows
+# stored before the ingest fix get the same treatment at display time.
+_PLATFORM_PREFIX_RE = re.compile(r"^[A-Z]{2,5} - ")
+_DOC_TYPE_LEAVES = {
+    "contracts", "contract", "invoices", "invoice", "orders", "order",
+    "traffic", "traffic instructions - creative piq",
+    "nab and disclosures", "nab", "nab form", "nab forms",
+    "election forms nab loa fec etc", "terms and disclosures",
+    "agreements", "agreement", "disclosures",
+}
+
+
+def _purchaser(category_path: str) -> str:
+    """Advertiser/committee = first non-document-type segment from the leaf up,
+    with the cable ad-platform prefix stripped. Some stations nest Contracts/
+    Invoices/Traffic/NAB folders under the committee, so the leaf is often a
+    document type rather than the advertiser."""
+    parts = [p.strip() for p in (category_path or "").split("/") if p.strip()]
+    for seg in reversed(parts):
+        name = _PLATFORM_PREFIX_RE.sub("", seg).strip()
+        if name.lower() in _DOC_TYPE_LEAVES:
+            continue
+        return name
+    return ""
+
 
 def _fcc_folder_page(callsign: str, service: str, entity_id, download_url: str) -> str:
     """Deep link to the FCC folder that contains this filing. FCC's browse UI
@@ -133,9 +158,10 @@ df["provider_type"] = df["service"].map(lambda s: _PROVIDER_TYPE.get(str(s).uppe
 # Coverage tier: broadcast + Comcast cable are Bay-Area-specific; national
 # providers (AT&T/DirecTV/Dish) file only by state and are tagged statewide.
 df["coverage"] = df["market"].map(lambda m: "Statewide (CA)" if "statewide" in str(m).lower() else "Bay Area")
-# Strip the cable ad-platform prefix ("AMP - ", "POL - ", ...) for any rows
-# stored before ingest did this itself; new rows are already clean.
-df["purchaser"] = df["purchaser"].fillna("").str.replace(r"^[A-Z]{2,5} - ", "", regex=True)
+# Re-derive the advertiser/committee from the category path (prefix strip +
+# document-type step-up) so rows stored before the ingest fix are corrected
+# here too, instead of trusting the stored value.
+df["purchaser"] = df["category_path"].map(_purchaser)
 df["fcc_page"] = df.apply(lambda r: _fcc_folder_page(r["callsign"], r["service"], r["entity_id"], r["download_url"]), axis=1)
 df["direct"] = df.apply(lambda r: _direct_url(r["download_url"], r["file_name"]), axis=1)
 
