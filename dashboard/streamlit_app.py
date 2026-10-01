@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import os
 import re
+from datetime import date
 
 import pandas as pd
 import streamlit as st
@@ -139,22 +140,39 @@ df["fcc_page"] = df.apply(lambda r: _fcc_folder_page(r["callsign"], r["service"]
 df["direct"] = df.apply(lambda r: _direct_url(r["download_url"], r["file_name"]), axis=1)
 
 # --- Filters ---
-cc, c0, c1, c2, c3 = st.columns([1.5, 1.3, 2, 1.8, 2.4])
-with cc:
+# Date bounds for the range picker (fall back to today if somehow no dates).
+_valid_dates = df["filed_date"].dropna()
+min_d = _valid_dates.min().date() if not _valid_dates.empty else date.today()
+max_d = _valid_dates.max().date() if not _valid_dates.empty else date.today()
+
+# Row 1: the category-style filters.
+r1a, r1b, r1c, r1d = st.columns(4)
+with r1a:
     coverages = sorted(df["coverage"].dropna().unique())
     picked_coverage = st.multiselect("Coverage", coverages, default=[],
                                      help="Bay Area = broadcast + Comcast cable (market-specific). "
                                           "Statewide (CA) = AT&T/DirecTV, filed only by state.")
-with c0:
+with r1b:
     ptypes = sorted(df["provider_type"].dropna().unique())
     picked_ptypes = st.multiselect("Type", ptypes, default=[])
-with c1:
+with r1c:
     stations = sorted(df["callsign"].dropna().unique())
     picked_stations = st.multiselect("Station / system", stations, default=[])
-with c2:
+with r1d:
     types = sorted(df["race_type"].dropna().unique())
     picked_types = st.multiselect("Race / category", types, default=[])
-with c3:
+
+# Row 2: advertiser/committee picker, date range, and free-text search.
+r2a, r2b, r2c, r2d = st.columns([3, 1.5, 1.5, 3])
+with r2a:
+    advertisers = sorted(a for a in df["purchaser"].dropna().unique() if a)
+    picked_advertisers = st.multiselect("Advertiser / committee", advertisers, default=[],
+                                        help="Pick one or more committees to see all their filings.")
+with r2b:
+    d_from = st.date_input("Filed from", value=min_d, min_value=min_d, max_value=max_d, format="YYYY-MM-DD")
+with r2c:
+    d_to = st.date_input("Filed to", value=max_d, min_value=min_d, max_value=max_d, format="YYYY-MM-DD")
+with r2d:
     query = st.text_input("Search advertiser or document name", "")
 
 view = df
@@ -166,6 +184,13 @@ if picked_stations:
     view = view[view["callsign"].isin(picked_stations)]
 if picked_types:
     view = view[view["race_type"].isin(picked_types)]
+if picked_advertisers:
+    view = view[view["purchaser"].isin(picked_advertisers)]
+# Only apply the date filter when the user actually narrows the range, so
+# undated rows stay visible by default.
+if d_from > min_d or d_to < max_d:
+    _dd = view["filed_date"].dt.date
+    view = view[_dd.notna() & (_dd >= d_from) & (_dd <= d_to)]
 if query.strip():
     q = query.strip().lower()
     mask = (
