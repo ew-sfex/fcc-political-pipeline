@@ -83,6 +83,14 @@ def get_engine():
         # "Can't load plugin" error). Normalize so either form just works.
         if url.startswith("postgres://"):
             url = "postgresql://" + url[len("postgres://"):]
+        # Pin the psycopg (v3) driver explicitly. SQLAlchemy 2.1 made psycopg
+        # v3 the default for bare postgresql:// URLs, so leaving it unnamed now
+        # tries to import a driver we may not have; name it so the dialect
+        # always resolves to the installed psycopg[binary].
+        if url.startswith("postgresql+psycopg2://"):
+            url = "postgresql+psycopg://" + url[len("postgresql+psycopg2://"):]
+        elif url.startswith("postgresql://"):
+            url = "postgresql+psycopg://" + url[len("postgresql://"):]
         _engine = create_engine(url, future=True)
     return _engine
 
